@@ -1,0 +1,160 @@
+                                    - 1 -
+                    =====================================
+                    |DOS NAVIGATOR MOUSE REFERENCE v0.03|
+                    =====================================
+                          Written by MAXIM GLUKHOV.
+                            Last revised 13/04/95.
+
+GLOBAL OPERATIONS
+Windows and Scrollbars operations, tree panel/dialog ....... Page 1
+
+File panels, dialog boxes, editor operations ............... Page 2
+
+Viewer operations, ASCII Table box,
+Short explanation on keys, Copyrights etc .................. Page 3
+
+
+
+Anywhere in program:
+=============================================================================
+Goto menu                          <L>  on menu bar - in case you want to
+                                        perform some other operation (move
+                                        window, clock etc) which should be
+                                        performed where menu bar placed,
+                                        use right menu button
+Select operation from status line  <C>  on wanted operation on status line
+
+Call screensaver (if               <M>  to upper right corner
+Options|Configuration|Screen savers
+->Use mouse to call server is on)
+Disable screensaver temporarily    <M>  to upper left corner
+Exit from screen savers            <C>  or <M> anywhere
+Move clock icon                    <RD> clock icon
+
+
+Window operations:
+=============================================================================
+Move window                        <DD> Window title
+Resize window                      <DD> Lower right window corner which is
+                                        drawn as single-line frame
+Close window                       <C>  On close window icon ([*]) in upper
+                                        left corner
+Zoom/Unzoom window                 <C>  On zoom window icon ([|]) in upper
+                                        right corner
+
+
+Scrollbars: (unless stated otherwise this works only on vertical scrollbars)
+=============================================================================
+Move string up/down (left/         <C>  On arrors on scrollbar end.
+right for horizontal scrollbars)
+Go to exact position (works on     <DD> scrolbar frame (#) to position you
+horizontal scrollbar too)               need
+Go to list top/bottom              <C>  On scrollbar very next to up/down
+                                        arrow on its end.
+Go page up/down                    <C>  scrollbar very next to up/down
+                                        arrow on its end second time.
+
+
+Tree panel/dialog
+=============================================================================
+Go to some directory in            <C>  on directory name in tree panel
+                                or <LD> on directory name in tree dialog
+
+Expand condense direcories         <C>  on [-] next to directory name in tree
+nesting level when viewing disk         panel
+tree in one of panels
+
+                                    - 2 -
+
+File panels:
+=============================================================================
+Change left/right panel width      <D>  vertical frame section between panels
+
+Close current panel                <C>  on external bracket ([ for left file
+                                        panel; ] for right file panel) of
+                                        drive line
+
+Close non-active panel             <C>  on internal bracket (] for left panel
+                                        [ for right panel) of drive line
+
+Command line history window        <CC> on command line
+
+Hide left/right file panel         <L>  on brackets surrounding drive line
+
+Change disk drive for panel        <C>  on file panel title on drive letter
+                                or <C>  on drive letter in drive line
+
+Change directory for panel         <C>  on file panel title on directory
+
+Go to directory, execute file      <CC> on directory or file
+
+Invert file selection.             <R>  on file
+
+Invert multiple files selection    <RD> from first to last file
+
+Copy/move/delete selected file(s)  <LD> selected file(s) or directories from
+or directories from one panel to        one panel to another one or drive
+another one or to one of the            line; <LD>to directory in second
+other panel's directories.              panel to copy to that directory;
+(Deletion only if trashcan is           select "remoVe source file" in copy
+enabled)                                dialog to move; <LD> file file(s) or
+                                        directories to trashcan to delete
+                                        them.
+
+Copy/move/delete all files in      <LD> totals status in mini-panel (lower
+directory including all                 part of file panel very next to
+subdirectories from one                 bottom border) from needed panel
+panel to another                        to another panel/trashcan or drive
+                                        line.
+
+Exit from user screen              <C>  anywhere
+
+
+In ANY dialog box:
+(in most cases by dialog boxes I call window which cannot be resized)
+=============================================================================
+Send <ENTER>                       <R>  anywhere
+
+Abort dialog (same as close        <C>  On close window icon ([*]) in upper
+window)                                 left corner of dialog
+
+Choose button or field, pick some  <L>  on button, field, item, checkbox
+item,invert selection in some
+check box.
+
+Recall history list for input line <C>  On arrow next to the input line
+
+Move dialog                        <DD> Dialog title
+
+
+
+Editor
+=============================================================================
+Show ruler                         <RD> anywhere in editor window
+Block selection                    <LD> anywhere in editor window
+Go to some position in editor      <C>  on this position
+window
+
+                                    - 3 -
+
+Viewer
+=============================================================================
+Scroll up/down                     <C>  on top/bottom part of screen
+                                        somewhere near center
+Scroll left/right                  <C>  on left/right part of screen
+
+
+ASCII Table
+=============================================================================
+Send some character to current     <DD> on character
+active input line
+
+
+
+Short explanation: <L> means click with left mouse button, <R> means click
+with right mouse button. <C> click by left or right mouse button. <RD>,<LD>
+and <DD> means drag by right mouse button, left mouse button or by left or
+right mouse button accordingly.<LL>,<RR> and <CC> means double click by left
+mouse button, right mouse button or any mouse button (but you have to click
+same button twice in this case) accordingly. <M> - move mouse cursor.
+!
