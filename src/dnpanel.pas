@@ -6,7 +6,7 @@ unit dnpanel;
 interface
 
 uses
-  SysUtils, Classes, ncurses, dnscreen;
+  SysUtils, Classes, ncurses, dnscreen, dnvfs;
 
 type
   TSortMode = (smName, smExt, smSize, smDate, smUnsorted);
@@ -29,7 +29,12 @@ type
     Active: Boolean;
     SortMode: TSortMode;
     Mask: AnsiString;        // file mask filter, '' = all
+    Vfs: TVFS;               // never nil; LocalVFS by default
     constructor Create(const APath: AnsiString);
+    destructor Destroy; override;
+    { switch to another VFS (frees the old one unless it is LocalVFS) }
+    procedure SetVfs(AVfs: TVFS; const APath: AnsiString);
+    function DisplayPath: AnsiString;
     procedure Load;
     procedure Draw;
     procedure MoveCursor(delta: Integer);
@@ -150,6 +155,7 @@ end;
 
 constructor TPanel.Create(const APath: AnsiString);
 begin
+  Vfs := LocalVFS;
   Path := ExpandFileName(APath);
   Cur := 0;
   Top := 0;
@@ -158,14 +164,44 @@ begin
   Load;
 end;
 
+destructor TPanel.Destroy;
+begin
+  if Vfs <> TVFS(LocalVFS) then
+    Vfs.Free;
+  inherited;
+end;
+
+procedure TPanel.SetVfs(AVfs: TVFS; const APath: AnsiString);
+begin
+  if (Vfs <> TVFS(LocalVFS)) and (Vfs <> AVfs) then
+    Vfs.Free;
+  Vfs := AVfs;
+  Path := APath;
+  Cur := 0;
+  Top := 0;
+  Load;
+end;
+
+function TPanel.DisplayPath: AnsiString;
+begin
+  if Vfs.IsLocal then
+    Result := Path
+  else
+    Result := Vfs.Display(Path);
+end;
+
 procedure TPanel.Load;
 var
-  sr: TSearchRec;
-  n: Integer;
+  items: TVfsItems;
+  err: AnsiString;
+  i, n: Integer;
+  hasUp: Boolean;
 begin
   SetLength(Files, 0);
   n := 0;
-  if Path <> '/' then
+  { '..' everywhere except the local root — inside a VFS it exits at root }
+  hasUp := not (Vfs.IsLocal and (Path = '/'));
+  if hasUp then
   begin
     SetLength(Files, 1);
     Files[0].Name := '..';
@@ -175,23 +211,20 @@ begin
     Files[0].Sel := False;
     n := 1;
   end;
-  if FindFirst(IncludeTrailingPathDelimiter(Path) + '*', faAnyFile, sr) = 0 then
-  begin
-    repeat
-      if (sr.Name = '.') or (sr.Name = '..') then Continue;
-      if (Mask <> '') and ((sr.Attr and faDirectory) = 0) and
-         not MatchMask(sr.Name, Mask) then Continue;
+  if Vfs.List(Path, items, err) then
+    for i := 0 to High(items) do
+    begin
+      if (Mask <> '') and not items[i].IsDir and
+         not MatchMask(items[i].Name, Mask) then Continue;
       SetLength(Files, n + 1);
-      Files[n].Name := sr.Name;
-      Files[n].IsDir := (sr.Attr and faDirectory) <> 0;
-      Files[n].Size := sr.Size;
-      Files[n].MTime := FileDateToDateTime(sr.Time);
+      Files[n].Name := items[i].Name;
+      Files[n].IsDir := items[i].IsDir;
+      Files[n].Size := items[i].Size;
+      Files[n].MTime := items[i].MTime;
       Files[n].Sel := False;
       Files[n].SizeKnown := False;
       Inc(n);
-    until FindNext(sr) <> 0;
-    FindClose(sr);
-  end;
+    end;
   if (n > 1) and (SortMode <> smUnsorted) then
     SortFiles(Files, 0, n - 1, SortMode);
   if Cur >= n then Cur := n - 1;
@@ -232,9 +265,10 @@ begin
   NmW := inner - SzW - DtW - 2;
 
   { top border with centered path title }
-  title := ' ' + Path + ' ';
+  title := ' ' + DisplayPath + ' ';
   if Utf8Len(title) > inner - 2 then
-    title := ' …' + Utf8Copy(Path, Utf8Len(Path) - (inner - 6), inner - 5) + ' ';
+    title := ' …' + Utf8Copy(DisplayPath, Utf8Len(DisplayPath) - (inner - 6),
+                             inner - 5) + ' ';
   PutStr(1, X0, bxTL + Rep(bxH, inner) + bxTR, cpFrame, True);
   if Active then
     PutStr(1, X0 + 1 + (inner - Utf8Len(title)) div 2, title, cpTitleAct)
@@ -362,7 +396,7 @@ begin
     GoUp;
     Exit;
   end;
-  Path := IncludeTrailingPathDelimiter(Path) + f.Name;
+  Path := VfsJoin(Path, f.Name);
   Cur := 0;
   Top := 0;
   Load;
@@ -370,13 +404,35 @@ end;
 
 procedure TPanel.GoUp;
 var
-  prev: AnsiString;
-  i: Integer;
+  prev, ldir, lcur: AnsiString;
+  i, p: Integer;
 begin
-  if Path = '/' then Exit;
-  prev := ExtractFileName(Path);
-  Path := ExtractFileDir(Path);
-  if Path = '' then Path := '/';
+  if (Path = '') or (Path = '/') then
+  begin
+    { at the VFS root: leave the VFS (archive -> its local directory) }
+    if Vfs.ParentExit(ldir, lcur) then
+    begin
+      SetVfs(LocalVFS, ldir);
+      for i := 0 to High(Files) do
+        if Files[i].Name = lcur then
+        begin
+          Cur := i;
+          Break;
+        end;
+    end;
+    Exit;
+  end;
+  p := Length(Path);
+  while (p > 0) and (Path[p] <> '/') do
+    Dec(p);
+  prev := Copy(Path, p + 1, MaxInt);
+  if Vfs.IsLocal then
+  begin
+    Path := Copy(Path, 1, p - 1);
+    if Path = '' then Path := '/';
+  end
+  else
+    Path := Copy(Path, 1, p - 1);   // '' = VFS root
   Cur := 0;
   Top := 0;
   Load;

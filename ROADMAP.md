@@ -49,33 +49,30 @@ Refactor `TPanel` from direct `FindFirst` onto a `TVFS` interface
 (list / stat / open-read / open-write / mkdir / delete / rename).
 Backends:
 
-- [ ] **LocalFS** (extract current behavior; no functional change)
-- [ ] **ArchiveFS** (DN 3.9): Enter on zip/tar/tgz/7z browses it like a
-      directory; copy out = extract, copy in = pack. Backend: `bsdtar`
-      (ships with macOS, reads everything) via subprocess; listing parsed
-      from `bsdtar -tvf`.
-- [ ] Pack / extract dialogs (Shift-F1 / Shift-F2, 3.15–3.16)
-- [ ] **RemoteFS — the Navigator Link replacement** (DN 12 reimagined as
-      MC-style shell link): SFTP first (openssh `sftp -b` batch mode or
-      libssh2 via dynamic loading — decide by spike), then FTP and WebDAV
-      (libcurl covers both). Panel path syntax `sftp://user@host/path`,
-      Disk menu entry per protocol; copy/move between any two backends
-      goes through the VFS streams.
-- [ ] **SSH connection manager** (à la [redial](https://github.com/taypo/redial)):
-      tree of saved sessions organized in folders, stored in ssh-config
-      format (`~/.config/dnfpc/sessions`); connect opens a RemoteFS panel
-      or a terminal session; per-connection port forwarding (local /
-      remote / dynamic), ssh-key attach + copy-id to host; remembers last
-      selection and folder expand state. UI: dialog from the Disk menu.
-      Depends on RemoteFS.
-- [ ] List panel: read file list from a file (Ctrl-W, 2.12) as a virtual
-      listing
-- [ ] UU encode/decode (Ctrl-F7/F8, 3.17–3.18) — small, rides on the
-      VFS stream helpers
+- [x] **LocalFS** — current behavior extracted behind `TVFS`; all 93
+      prior tests still pass unchanged.
+- [x] **ArchiveFS** (DN 3.9): Enter on zip/tar/tgz/7z/… browses it as a
+      directory; view, copy out (extract), copy in and delete (`.zip` via
+      `zip`), edit-in-place writes back. Backend: `bsdtar` + `zip`.
+- [~] Pack / extract: copy in/out of an archive panel covers it; explicit
+      Shift-F1/F2 dialogs still pending.
+- [x] **RemoteFS — the Navigator Link replacement**: SFTP over the OpenSSH
+      client (batch mode, ControlMaster reuse). `cd sftp://user@host/path`
+      or the Disk menu; copy/move/delete/mkdir across any two VFSes go
+      through the stream helpers. FTP/WebDAV (libcurl) still to come.
+- [x] **SSH connection manager** (à la redial): folder tree of saved
+      sessions in ssh_config format (`~/.config/dnfpc/sessions`, valid for
+      real `ssh -G`); connect opens a RemoteFS panel, Ctrl-T a terminal
+      login, Ctrl-K ssh-copy-id; add/edit/delete; per-session forwards and
+      start dir. UI from the Disk menu / Ctrl-S. (Live port-forward toggles
+      pending.)
+- [x] List panel: read a file list (Ctrl-W, 2.12) as a virtual `TListVFS`.
+- [x] UU encode/decode (Ctrl-F7/F8 or Commands menu, 3.17–3.18): pure
+      Pascal, round-trips and interoperates with system `uudecode`.
 
-Size: XL. The single biggest architectural change; everything after it
-gets cheaper. Test strategy: local sshd/pyftpdlib/wsgidav fixtures in the
-venv; archive tests need only bsdtar.
+Size: XL — done bar FTP/WebDAV, pack dialogs, live forward toggles.
+Tested with bsdtar (archives), a fake sftp transport driven by
+`DN_SFTP_CMD` (remote + sessions), and `ssh -G` config validation.
 
 ## M4 — MicroEd & viewer completion (DN 7, 8)
 

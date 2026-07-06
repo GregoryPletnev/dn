@@ -71,9 +71,33 @@ Two layers, both run by `make test`:
 | Ctrl+O | User screen (output of executed commands) |
 | Ctrl+E / Ctrl+X | Command history: previous / next |
 | Ctrl+F | Insert current filename into the command line |
+| Ctrl+S | SSH session manager |
+| Ctrl+W | Read a file list into the panel (virtual listing) |
+| Ctrl+F7 / Ctrl+F8 | UU-encode / UU-decode the current file |
 
-F2 (user menu) is a placeholder. Menus with no working items yet
-(Disk, Options) show a disabled entry.
+F2 (user menu) is a placeholder; the Options menu still shows a disabled
+entry.
+
+## Virtual file systems
+
+Panels browse more than the local disk (ROADMAP M3):
+
+- **Archives as directories** (DN 3.9): press Enter on a `.zip`, `.tar`,
+  `.tgz`, `.7z`, `.iso`, … to browse it like a folder. View files inside,
+  copy in/out (extract/pack), and — for `.zip` — delete members and edit
+  a file in place (MicroEd writes it back). Backend: `bsdtar` (+ `zip`).
+- **Remote over SFTP** — the Navigator Link reborn as an MC-style shell
+  link. `cd sftp://user@host[:port]/path`, or use the Disk menu. Copy,
+  move, delete and mkdir work across any two file systems (local ⇄ remote
+  ⇄ archive). Uses the OpenSSH client with a shared ControlMaster.
+- **SSH session manager** (Ctrl+S or Disk → SSH sessions): a folder tree
+  of saved sessions stored in `~/.config/dnfpc/sessions` (ordinary
+  ssh_config, valid for `ssh -G`). Enter connects a remote panel, Ctrl+T
+  opens a terminal login, Ctrl+K runs `ssh-copy-id`; Insert/F4/Del add,
+  edit and remove sessions. Per-session HostName/User/Port/IdentityFile,
+  port forwards and a remote start directory.
+- **File list panel** (Ctrl+W, DN 2.12): read a text file of paths into a
+  virtual listing.
 
 ## Command line
 

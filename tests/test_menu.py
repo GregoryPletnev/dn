@@ -45,7 +45,7 @@ def test_fkey_bar_pulldn_click_opens_menu(dn):
 
 
 def test_disabled_item_not_executable(dn):
-    dn.click_on('Disk')
+    dn.click_on('Options')              # Options is still a placeholder
     dn.wait_text('(not implemented)')
     dn.key('ENTER')                     # nothing selectable — must not close/crash
     dn.pump(0.2)

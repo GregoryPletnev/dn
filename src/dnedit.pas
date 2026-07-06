@@ -9,7 +9,7 @@ unit dnedit;
 interface
 
 uses
-  Classes, dnwin;
+  Classes, dnwin, dnvfs;
 
 type
   TEditWin = class(TWin)
@@ -22,6 +22,8 @@ type
     Overwrite: Boolean;
     LastFind: AnsiString;
     SavedTick: QWord;        // 'Saved' notification timestamp
+    PutVfs: TVFS;            // non-nil: after saving, put the file here
+    PutPath: AnsiString;
     constructor CreateEdit(const APath: AnsiString; ALines: TStringList);
     destructor Destroy; override;
     procedure DrawContent(Focused: Boolean); override;
@@ -115,6 +117,8 @@ begin
 end;
 
 function TEditWin.Save: Boolean;
+var
+  err: AnsiString;
 begin
   Result := False;
   try
@@ -126,6 +130,12 @@ begin
     on E: Exception do
       MsgBox('Error', 'Cannot save ' + Path + #10 + E.Message, ['OK']);
   end;
+  if Result and (PutVfs <> nil) then
+    if not PutVfs.PutFile(Path, PutPath, err) then
+    begin
+      MsgBox('Error', 'Cannot write back to archive:'#10 + err, ['OK']);
+      Result := False;
+    end;
 end;
 
 function TEditWin.ConfirmClose: Boolean;

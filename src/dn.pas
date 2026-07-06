@@ -8,7 +8,8 @@ uses
   {$ifdef unix}clocale, Unix, BaseUnix, termio,{$endif}
   SysUtils, Classes, ncurses,
   dnscreen, dnpanel, dnmenu, dndialog, dnfileops, dntetris,
-  dnwin, dnview, dnedit, dnconfig;
+  dnwin, dnview, dnedit, dnconfig, dnvfs, dnarcvfs, dnsftp,
+  dnsession, dnsessui, dnuu;
 
 const
   FKeyLabels: array[1..10] of AnsiString =
@@ -42,7 +43,7 @@ var
   s: AnsiString;
 begin
   FillRow(LINES - 2, 0, COLS, cpCmdLine);
-  s := ActiveP.Path + '>' + CmdLine;
+  s := ActiveP.DisplayPath + '>' + CmdLine;
   if Length(s) > COLS - 2 then
     s := Copy(s, Length(s) - (COLS - 3), COLS - 2);
   PutStr(LINES - 2, 0, s, cpCmdLine);
@@ -135,6 +136,22 @@ begin
     L.Add(ActiveP.CurFile.Name);
 end;
 
+function TargetIsDir(const Name: AnsiString): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  for i := 0 to High(ActiveP.Files) do
+    if ActiveP.Files[i].Name = Name then
+      Exit(ActiveP.Files[i].IsDir);
+end;
+
+function TmpName: AnsiString;
+begin
+  Result := GetTempDir + 'dncp-' + IntToStr(GetProcessID) + '-' +
+            IntToStr(Random(1000000));
+end;
+
 function TargetLabel(L: TStringList): AnsiString;
 begin
   if L.Count = 1 then
@@ -147,8 +164,8 @@ procedure DoCopyOrMove(IsMove: Boolean);
 var
   L: TStringList;
   i: Integer;
-  err, verb, src, dst: AnsiString;
-  ok: Boolean;
+  err, verb, src, dst, tmp, tmp2: AnsiString;
+  ok, isdir: Boolean;
 begin
   L := TStringList.Create;
   try
@@ -156,14 +173,45 @@ begin
     if L.Count = 0 then Exit;
     if IsMove then verb := 'Move' else verb := 'Copy';
     if MsgBox(verb, verb + ' ' + TargetLabel(L) + ' to' + #10 +
-              OtherPanel.Path + ' ?', ['Yes', 'No']) <> 0 then
+              OtherPanel.DisplayPath + ' ?', ['Yes', 'No']) <> 0 then
       Exit;
     for i := 0 to L.Count - 1 do
     begin
-      src := IncludeTrailingPathDelimiter(ActiveP.Path) + L[i];
-      dst := IncludeTrailingPathDelimiter(OtherPanel.Path) + L[i];
-      if IsMove then ok := MoveTree(src, dst, err)
-      else ok := CopyTree(src, dst, err);
+      src := VfsJoin(ActiveP.Path, L[i]);
+      dst := VfsJoin(OtherPanel.Path, L[i]);
+      isdir := TargetIsDir(L[i]);
+      if ActiveP.Vfs.IsLocal and OtherPanel.Vfs.IsLocal then
+      begin
+        { fast local path (rename on move) }
+        if IsMove then ok := MoveTree(src, dst, err)
+        else ok := CopyTree(src, dst, err);
+      end
+      else
+      begin
+        if OtherPanel.Vfs.IsLocal then
+        begin
+          if isdir then ok := ActiveP.Vfs.GetTree(src, dst, err)
+          else ok := ActiveP.Vfs.GetFile(src, dst, err);
+        end
+        else if ActiveP.Vfs.IsLocal then
+        begin
+          if isdir then ok := OtherPanel.Vfs.PutTree(src, dst, err)
+          else ok := OtherPanel.Vfs.PutFile(src, dst, err);
+        end
+        else
+        begin
+          tmp := TmpName;
+          if isdir then
+            ok := ActiveP.Vfs.GetTree(src, tmp, err) and
+                  OtherPanel.Vfs.PutTree(tmp, dst, err)
+          else
+            ok := ActiveP.Vfs.GetFile(src, tmp, err) and
+                  OtherPanel.Vfs.PutFile(tmp, dst, err);
+          DeleteTree(tmp, tmp2);
+        end;
+        if ok and IsMove then
+          ok := ActiveP.Vfs.DeletePath(src, isdir, err);
+      end;
       if not ok then
       begin
         MsgBox('Error', err, ['OK']);
@@ -189,7 +237,8 @@ begin
     if MsgBox('Delete', 'Delete ' + TargetLabel(L) + ' ?', ['Yes', 'No']) <> 0 then
       Exit;
     for i := 0 to L.Count - 1 do
-      if not DeleteTree(IncludeTrailingPathDelimiter(ActiveP.Path) + L[i], err) then
+      if not ActiveP.Vfs.DeletePath(VfsJoin(ActiveP.Path, L[i]),
+                                    TargetIsDir(L[i]), err) then
       begin
         MsgBox('Error', err, ['OK']);
         Break;
@@ -202,15 +251,15 @@ end;
 
 procedure DoMkDir;
 var
-  name: AnsiString;
+  name, i2: AnsiString;
   i: Integer;
 begin
   name := '';
   if not InputBox('Make directory', 'Directory name:', name) then Exit;
   if name = '' then Exit;
-  if not CreateDir(IncludeTrailingPathDelimiter(ActiveP.Path) + name) then
+  if not ActiveP.Vfs.MakeDir(VfsJoin(ActiveP.Path, name), i2) then
   begin
-    MsgBox('Error', 'Cannot create directory "' + name + '"', ['OK']);
+    MsgBox('Error', 'Cannot create directory "' + name + '"'#10 + i2, ['OK']);
     Exit;
   end;
   ReloadPanels;
@@ -278,25 +327,56 @@ end;
 
 procedure DoChangeDir(arg: AnsiString);
 var
-  p: AnsiString;
+  p, target, port, rpath, err: AnsiString;
+  sv: TSftpVFS;
+  items: TVfsItems;
 begin
   arg := Trim(arg);
+  { cd sftp://user@host[:port]/path — open a remote panel (DN 12 reborn) }
+  if ParseSftpUrl(arg, target, port, rpath) then
+  begin
+    sv := TSftpVFS.Create(target, port);
+    if sv.List(rpath, items, err) then
+      ActiveP.SetVfs(sv, rpath)
+    else
+    begin
+      sv.Free;
+      MsgBox('sftp', 'Cannot connect:'#10 + err, ['OK']);
+    end;
+    Exit;
+  end;
   if (arg = '') or (arg = '~') then
     arg := GetEnvironmentVariable('HOME')
   else if Copy(arg, 1, 2) = '~/' then
     arg := GetEnvironmentVariable('HOME') + Copy(arg, 2, MaxInt);
   if (arg <> '') and (arg[1] <> '/') then
-    p := IncludeTrailingPathDelimiter(ActiveP.Path) + arg
+  begin
+    if not ActiveP.Vfs.IsLocal then
+    begin
+      MsgBox('cd', 'Relative cd is not supported on a remote panel.', ['OK']);
+      Exit;
+    end;
+    p := IncludeTrailingPathDelimiter(ActiveP.Path) + arg;
+  end
   else
     p := arg;
   p := ExpandFileName(p);
   if DirectoryExists(p) then
   begin
-    ActiveP.Path := ExcludeTrailingPathDelimiter(p);
-    if ActiveP.Path = '' then ActiveP.Path := '/';
-    ActiveP.Cur := 0;
-    ActiveP.Top := 0;
-    ActiveP.Load;
+    if not ActiveP.Vfs.IsLocal then
+      ActiveP.SetVfs(LocalVFS, ExcludeTrailingPathDelimiter(p))
+    else
+    begin
+      ActiveP.Path := ExcludeTrailingPathDelimiter(p);
+      ActiveP.Cur := 0;
+      ActiveP.Top := 0;
+      ActiveP.Load;
+    end;
+    if ActiveP.Path = '' then
+    begin
+      ActiveP.Path := '/';
+      ActiveP.Load;
+    end;
   end
   else
     MsgBox('cd', 'No such directory:'#10 + p, ['OK']);
@@ -319,8 +399,10 @@ begin
     DoChangeDir(Copy(cmd, 3, MaxInt))
   else if cmd = 'exit' then
     Quit := True
+  else if ActiveP.Vfs.IsLocal then
+    ShellExec(cmd, ActiveP.Path)
   else
-    ShellExec(cmd, ActiveP.Path);
+    ShellExec(cmd, GetCurrentDir);
 end;
 
 procedure HistRecall(dir: Integer);
@@ -356,7 +438,8 @@ var
 begin
   f := ActiveP.CurFile;
   if (f.Name = '') or (f.Name = '..') then Exit;
-  full := IncludeTrailingPathDelimiter(ActiveP.Path) + f.Name;
+  if not ActiveP.Vfs.IsLocal then Exit;
+  full := VfsJoin(ActiveP.Path, f.Name);
   ext := LowerCase(Copy(ExtractFileExt(f.Name), 2, MaxInt));
   cmd := ExtCommand(ext);
   if cmd = '@edit' then
@@ -380,11 +463,96 @@ begin
 end;
 
 procedure EnterOrLaunch;
+var
+  av: TArchiveVFS;
+  items: TVfsItems;
+  err, full: AnsiString;
 begin
   if ActiveP.CurFile.IsDir then
-    ActiveP.EnterCurrent
+  begin
+    ActiveP.EnterCurrent;
+    Exit;
+  end;
+  { archives open as directories (DN 3.9) }
+  if ActiveP.Vfs.IsLocal and IsArchiveName(ActiveP.CurFile.Name) then
+  begin
+    full := VfsJoin(ActiveP.Path, ActiveP.CurFile.Name);
+    av := TArchiveVFS.Create(full);
+    if av.List('', items, err) then
+    begin
+      ActiveP.SetVfs(av, '');
+      Exit;
+    end;
+    av.Free;
+    MsgBox('Archive', 'Cannot open archive:'#10 + err, ['OK']);
+    Exit;
+  end;
+  TryLaunch;
+end;
+
+procedure ConnectSftp(const Target, Port, Dir: AnsiString);
+var
+  sv: TSftpVFS;
+  items: TVfsItems;
+  err, d: AnsiString;
+begin
+  d := Dir;
+  if d = '' then d := '.';
+  sv := TSftpVFS.Create(Target, Port);
+  if sv.List(d, items, err) then
+    ActiveP.SetVfs(sv, d)
   else
-    TryLaunch;
+  begin
+    sv.Free;
+    MsgBox('sftp', 'Cannot connect to ' + Target + ':'#10 + err, ['OK']);
+  end;
+end;
+
+procedure RunSshInteractive(const cmd: AnsiString);
+begin
+  def_prog_mode;
+  endwin;
+  WriteLn;
+  {$ifdef unix}
+  fpSystem(cmd);
+  {$endif}
+  Write('-- Press any key --');
+  Flush(Output);
+  {$ifdef unix}
+  WaitAnyKey;
+  {$endif}
+  reset_prog_mode;
+  refresh;
+end;
+
+procedure DoSessions;
+var
+  sess: TSession;
+  target, port, dir: AnsiString;
+begin
+  case SessionManager(sess) of
+    srConnect:
+      begin
+        SessionTarget(sess, target, port, dir);
+        ConnectSftp(target, port, dir);
+      end;
+    srTerminal:
+      RunSshInteractive(SessionSshCmd(sess));
+    srCopyId:
+      RunSshInteractive(SessionCopyIdCmd(sess));
+  end;
+end;
+
+procedure DoSftpConnect;
+var
+  url, target, port, path: AnsiString;
+begin
+  url := 'sftp://';
+  if not InputBox('Connect', 'sftp URL (sftp://user@host/path):', url) then Exit;
+  if ParseSftpUrl(url, target, port, path) then
+    ConnectSftp(target, port, path)
+  else
+    MsgBox('Connect', 'Not a valid sftp:// URL.', ['OK']);
 end;
 
 procedure SortDialog(p: TPanel);
@@ -429,8 +597,9 @@ var
 begin
   f := ActiveP.CurFile;
   if not f.IsDir or (f.Name = '..') then Exit;
+  if not ActiveP.Vfs.IsLocal then Exit;
   ActiveP.Files[ActiveP.Cur].Size :=
-    TreeSize(IncludeTrailingPathDelimiter(ActiveP.Path) + f.Name);
+    TreeSize(VfsJoin(ActiveP.Path, f.Name));
   ActiveP.Files[ActiveP.Cur].SizeKnown := True;
 end;
 
@@ -462,22 +631,127 @@ begin
   MarkDiff(RightP, LeftP);
 end;
 
+{ local path of the current file; for VFS panels extract to a temp copy }
+function MaterializeCurrent(out LocalPath: AnsiString): Boolean;
+var
+  err: AnsiString;
+begin
+  Result := False;
+  if (ActiveP.CurFile.Name = '') or ActiveP.CurFile.IsDir then Exit;
+  if ActiveP.Vfs.IsLocal then
+  begin
+    LocalPath := VfsJoin(ActiveP.Path, ActiveP.CurFile.Name);
+    Exit(True);
+  end;
+  LocalPath := TmpName + '-' + ActiveP.CurFile.Name;
+  if not ActiveP.Vfs.GetFile(VfsJoin(ActiveP.Path, ActiveP.CurFile.Name),
+                             LocalPath, err) then
+  begin
+    MsgBox('Error', err, ['OK']);
+    Exit;
+  end;
+  Result := True;
+end;
+
+procedure DoReadFileList;
+var
+  path, err: AnsiString;
+  L, paths: TStringList;
+  i: Integer;
+  lv: TListVFS;
+begin
+  path := '';
+  if not InputBox('Read file list', 'List file (one path per line):', path) then
+    Exit;
+  path := Trim(path);
+  if (path = '') then Exit;
+  if (path[1] <> '/') then
+    path := IncludeTrailingPathDelimiter(ActiveP.Path) + path;
+  if not FileExists(path) then
+  begin
+    MsgBox('Read file list', 'No such file:'#10 + path, ['OK']);
+    Exit;
+  end;
+  L := TStringList.Create;
+  paths := TStringList.Create;
+  try
+    L.LoadFromFile(path);
+    for i := 0 to L.Count - 1 do
+      if Trim(L[i]) <> '' then
+      begin
+        if Trim(L[i])[1] = '/' then paths.Add(Trim(L[i]))
+        else paths.Add(IncludeTrailingPathDelimiter(ActiveP.Path) + Trim(L[i]));
+      end;
+  finally
+    L.Free;
+  end;
+  if paths.Count = 0 then
+  begin
+    paths.Free;
+    Exit;
+  end;
+  lv := TListVFS.Create(ExtractFileName(path), paths);
+  ActiveP.SetVfs(lv, '/');
+  err := '';
+end;
+
+procedure DoUUEncode;
+var
+  f: TFileRec;
+  src, dst, err: AnsiString;
+begin
+  f := ActiveP.CurFile;
+  if (f.Name = '') or f.IsDir or not ActiveP.Vfs.IsLocal then Exit;
+  src := VfsJoin(ActiveP.Path, f.Name);
+  dst := VfsJoin(ActiveP.Path, f.Name + '.uue');
+  if UUEncodeFile(src, dst, err) then ReloadPanels
+  else MsgBox('UU-encode', err, ['OK']);
+end;
+
+procedure DoUUDecode;
+var
+  f: TFileRec;
+  src, dst, base, err: AnsiString;
+begin
+  f := ActiveP.CurFile;
+  if (f.Name = '') or f.IsDir or not ActiveP.Vfs.IsLocal then Exit;
+  src := VfsJoin(ActiveP.Path, f.Name);
+  base := f.Name;
+  if LowerCase(ExtractFileExt(base)) = '.uue' then
+    base := Copy(base, 1, Length(base) - 4);
+  dst := VfsJoin(ActiveP.Path, base + '.decoded');
+  if UUDecodeFile(src, dst, err) then ReloadPanels
+  else MsgBox('UU-decode', err, ['OK']);
+end;
+
 procedure DoView;
 var
   w: TWin;
+  lp: AnsiString;
 begin
-  if (ActiveP.CurFile.Name = '') or ActiveP.CurFile.IsDir then Exit;
-  w := OpenViewer(IncludeTrailingPathDelimiter(ActiveP.Path) + ActiveP.CurFile.Name);
+  if not MaterializeCurrent(lp) then Exit;
+  w := OpenViewer(lp);
   if w <> nil then FocusWin := w;
 end;
 
 procedure DoEdit;
 var
-  w: TWin;
+  w: TEditWin;
+  lp: AnsiString;
 begin
-  if (ActiveP.CurFile.Name = '') or ActiveP.CurFile.IsDir then Exit;
-  w := OpenEditor(IncludeTrailingPathDelimiter(ActiveP.Path) + ActiveP.CurFile.Name);
-  if w <> nil then FocusWin := w;
+  if not MaterializeCurrent(lp) then Exit;
+  w := OpenEditor(lp);
+  if w <> nil then
+  begin
+    if not ActiveP.Vfs.IsLocal then
+    begin
+      { saving writes the temp copy back into the VFS (e.g. the zip) }
+      w.PutVfs := ActiveP.Vfs;
+      w.PutPath := VfsJoin(ActiveP.Path, ActiveP.CurFile.Name);
+      w.Title := ActiveP.CurFile.Name + ' (' + ActiveP.Vfs.Display('') + ')';
+    end;
+    FocusWin := w;
+  end;
 end;
 
 procedure DoHelp;
@@ -509,6 +783,13 @@ begin
     L.Add('  right click      invert selection');
     L.Add('  wheel            scroll panel under pointer');
     L.Add('  scrollbar        arrows = line, track = page');
+    L.Add('');
+    L.Add('Virtual file systems');
+    L.Add('  Enter on archive open zip/tar/7z/... as a directory');
+    L.Add('  cd sftp://u@host/  connect a remote (SFTP) panel');
+    L.Add('  Ctrl-S            SSH session manager');
+    L.Add('  Ctrl-W            read a file list into the panel');
+    L.Add('  Ctrl-F7/F8        UU-encode / UU-decode');
     L.Add('');
     L.Add('Windows (viewer, MicroEd editor)');
     L.Add('  F5               zoom / unzoom');
@@ -548,6 +829,10 @@ begin
     cmSortRight: SortDialog(RightP);
     cmFilterLeft: FilterDialog(LeftP);
     cmFilterRight: FilterDialog(RightP);
+    cmSessions: DoSessions;
+    cmSftpConnect: DoSftpConnect;
+    cmUUEncode: DoUUEncode;
+    cmUUDecode: DoUUDecode;
   end;
 end;
 
@@ -875,6 +1160,7 @@ begin
     27:        CmdLine := '';                  // Esc clears the command line
     3:         CompareDirs;                    // Ctrl+C: compare directories
     7:         CountDirSize;                   // Ctrl+G
+    19:        DoSessions;                     // Ctrl+S: SSH sessions
     21:        SwapPanels;                     // Ctrl+U
     5:         HistRecall(-1);                 // Ctrl+E: previous command
     24:        HistRecall(1);                  // Ctrl+X: next command
@@ -883,6 +1169,7 @@ begin
                    CmdLine := CmdLine + ActiveP.CurFile.Name + ' ';
                end;
     15:        ShowUserScreen;                 // Ctrl+O
+    23:        DoReadFileList;                 // Ctrl+W: read file list
     18:        ReloadPanels;                   // Ctrl+R
     20:        RunTetris;                      // Ctrl+T
   else

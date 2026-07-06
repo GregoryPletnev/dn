@@ -14,7 +14,7 @@ endif
 
 all: $(BIN)
 
-$(BIN): $(SRC) src/dnscreen.pas src/dnpanel.pas src/dnmenu.pas src/dndialog.pas src/dnfileops.pas src/dntetris.pas src/dnwin.pas src/dnview.pas src/dnedit.pas src/dnconfig.pas
+$(BIN): $(SRC) src/dnscreen.pas src/dnpanel.pas src/dnmenu.pas src/dndialog.pas src/dnfileops.pas src/dntetris.pas src/dnwin.pas src/dnview.pas src/dnedit.pas src/dnconfig.pas src/dnvfs.pas src/dnarcvfs.pas src/dnsftp.pas src/dnsession.pas src/dnsessui.pas src/dnuu.pas
 	@mkdir -p bin $(UNITDIR)
 	$(FPC) $(FPCFLAGS) $(SRC)
 
@@ -27,12 +27,12 @@ $(VENV)/bin/pytest:
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install --quiet pyte pytest
 
-bin/unittests: tests/unittests.pas src/dnscreen.pas src/dnpanel.pas src/dnfileops.pas
+bin/unittests: tests/unittests.pas src/dnscreen.pas src/dnpanel.pas src/dnfileops.pas src/dnvfs.pas src/dnuu.pas src/dnsession.pas
 	@mkdir -p bin $(UNITDIR)
 	$(FPC) $(FPCFLAGS) tests/unittests.pas
 
 test: all bin/unittests $(VENV)/bin/pytest
-	bin/unittests
+	DN_CONFIG_DIR=$(shell mktemp -d) bin/unittests
 	$(VENV)/bin/pytest tests -q
 
 clean:

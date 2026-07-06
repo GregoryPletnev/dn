@@ -26,6 +26,10 @@ const
   cmSortRight  = 15;
   cmFilterLeft = 16;
   cmFilterRight= 17;
+  cmSessions   = 18;
+  cmSftpConnect= 19;
+  cmUUEncode   = 20;
+  cmUUDecode   = 21;
 
 procedure DrawBar(sel: Integer);
 { Modal menu loop; startSel = menu index to open (0-based), returns cm*. }
@@ -90,9 +94,12 @@ begin
   AddItem('Invert selection', 'Ins', cmInvert);
   AddItem('Exit', 'F10', cmQuit);
   AddMenu('Disk');
-  AddItem('(not implemented)', '', cmNone);
+  AddItem('SSH sessions...', 'Ctrl-S', cmSessions);
+  AddItem('Connect sftp...', '', cmSftpConnect);
   AddMenu('Commands');
   AddItem('Re-read panels', 'Ctrl-R', cmRereadAll);
+  AddItem('UU-encode file', 'Ctrl-F7', cmUUEncode);
+  AddItem('UU-decode file', 'Ctrl-F8', cmUUDecode);
   AddMenu('Tools');
   AddItem('Tetris', 'Ctrl-T', cmTetris);
   AddMenu('Options');
