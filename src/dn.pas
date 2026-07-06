@@ -1,5 +1,5 @@
-{ dn — Dos Navigator look-and-feel file manager for the modern terminal.
-  FPC + ncurses, macOS / Linux. }
+{ dn — DN - DataNavigator: a Dos Navigator look-and-feel file manager
+  for the modern terminal. FPC + ncurses, macOS / Linux. }
 program dn;
 
 {$mode objfpc}{$H+}
@@ -8,10 +8,34 @@ uses
   {$ifdef unix}clocale, Unix, BaseUnix, termio,{$endif}
   SysUtils, Classes, ncurses,
   dnscreen, dnpanel, dnmenu, dndialog, dnfileops, dntetris,
-  dnwin, dnview, dnedit, dnconfig, dnvfs, dnarcvfs, dnsftp,
-  dnsession, dnsessui, dnuu;
+  dnwin, dnview, dnedit, dnconfig, dnoptions, dnvfs, dnarcvfs, dnmount,
+  dnsftp, dnsession, dnsessui, dnuu, dnusermenu;
+
+{$ifdef darwin}
+function setenv(name, value: PChar; overwrite: LongInt): LongInt;
+  cdecl; external 'c';
+
+{ The app bundle ships Homebrew's libncursesw, which only searches
+  Homebrew's terminfo path — absent on machines without Homebrew
+  ("Error opening terminal"). Point it at the terminfo copy bundled in
+  Resources plus the system database. }
+procedure SetupTerminfo;
+var
+  dirs, res: AnsiString;
+begin
+  if GetEnvironmentVariable('TERMINFO') <> '' then Exit;
+  if GetEnvironmentVariable('TERMINFO_DIRS') <> '' then Exit;
+  res := ExpandFileName(ExtractFileDir(ExpandFileName(ParamStr(0))) +
+                        '/../Resources/terminfo');
+  dirs := '/usr/share/terminfo';
+  if DirectoryExists(res) then
+    dirs := res + ':' + dirs;
+  setenv('TERMINFO_DIRS', PChar(dirs), 1);
+end;
+{$endif}
 
 const
+  DNVersion = '1.1';
   FKeyLabels: array[1..10] of AnsiString =
     ('Help', 'UserMn', 'View', 'Edit', 'Copy', 'RenMov', 'MkDir', 'Delete', 'PullDn', 'Exit');
   FKeyLabelsWin: array[1..10] of AnsiString =
@@ -31,6 +55,17 @@ var
   LastClickPanel: TPanel = nil;
   LastClickIdx: Integer = -1;
   LastClickTick: QWord = 0;
+  { panel split column, 0 = middle of the screen (Alt-[/], divider drag) }
+  PanelSplit: Integer = 0;
+
+type
+  TDragMode = (dmNone, dmMoveWin, dmResizeWin, dmSplit);
+
+var
+  { mouse drag in progress (button-motion events, xterm 1002) }
+  Drag: TDragMode = dmNone;
+  DragWin: TWin = nil;
+  DragOffX, DragOffY: Integer;
 
 procedure DrawMenuBar;
 begin
@@ -66,13 +101,28 @@ begin
   end;
 end;
 
+const
+  MinPanelW = 20;
+
 procedure Layout;
 var
   pw: Integer;
 begin
-  pw := COLS div 2;
+  pw := PanelSplit;
+  if pw <= 0 then pw := COLS div 2;
+  if pw > COLS - MinPanelW then pw := COLS - MinPanelW;
+  if pw < MinPanelW then pw := MinPanelW;
+  if (pw < MinPanelW) or (pw > COLS - MinPanelW) then
+    pw := COLS div 2;   // terminal too narrow for a custom split
   LeftP.X0 := 0;   LeftP.W := pw;         LeftP.H := LINES - 4;
   RightP.X0 := pw; RightP.W := COLS - pw; RightP.H := LINES - 4;
+end;
+
+procedure SetSplit(col: Integer);
+begin
+  if col < MinPanelW then col := MinPanelW;
+  if col > COLS - MinPanelW then col := COLS - MinPanelW;
+  PanelSplit := col;
 end;
 
 procedure DrawBase;
@@ -180,6 +230,17 @@ begin
       src := VfsJoin(ActiveP.Path, L[i]);
       dst := VfsJoin(OtherPanel.Path, L[i]);
       isdir := TargetIsDir(L[i]);
+      { overwrite check is local-target only: remote VFSes have no cheap
+        existence test }
+      if Opt.ConfirmOverwrite and not isdir and
+         OtherPanel.Vfs.IsLocal and FileExists(dst) then
+        case MsgBox('Overwrite',
+                    'Overwrite "' + L[i] + '" ?', ['Yes', 'No', 'Cancel']) of
+          0: ;
+          1: Continue;
+        else
+          Break;
+        end;
       if ActiveP.Vfs.IsLocal and OtherPanel.Vfs.IsLocal then
       begin
         { fast local path (rename on move) }
@@ -234,7 +295,8 @@ begin
   try
     GetTargets(L);
     if L.Count = 0 then Exit;
-    if MsgBox('Delete', 'Delete ' + TargetLabel(L) + ' ?', ['Yes', 'No']) <> 0 then
+    if Opt.ConfirmDelete and
+       (MsgBox('Delete', 'Delete ' + TargetLabel(L) + ' ?', ['Yes', 'No']) <> 0) then
       Exit;
     for i := 0 to L.Count - 1 do
       if not ActiveP.Vfs.DeletePath(VfsJoin(ActiveP.Path, L[i]),
@@ -247,6 +309,14 @@ begin
   finally
     L.Free;
   end;
+end;
+
+procedure DoQuit;
+begin
+  if Opt.ConfirmExit and
+     (MsgBox('Exit', 'Quit DN - DataNavigator ?', ['Yes', 'No']) <> 0) then
+    Exit;
+  Quit := True;
 end;
 
 procedure DoMkDir;
@@ -273,7 +343,61 @@ end;
 
 { --- command line ------------------------------------------------------ }
 
-procedure ShellExec(const cmd, dir: AnsiString);
+{$ifdef unix}
+{ system()-like shell run: the child gets default SIGINT/SIGQUIT while
+  dn ignores them (set at startup) — Ctrl-C aborts the command, not the
+  file manager. fpSystem must not be used here: it leaves the parent's
+  disposition in place, so ^C during a long command killed dn itself. }
+procedure RunShell(const cmd: AnsiString);
+var
+  pid: TPid;
+  status: cint;
+begin
+  pid := fpFork;
+  if pid = 0 then
+  begin
+    fpSignal(SIGINT, SignalHandler(SIG_DFL));
+    fpSignal(SIGQUIT, SignalHandler(SIG_DFL));
+    fpExecl('/bin/sh', ['-c', cmd]);
+    fpExit(127);
+  end;
+  if pid > 0 then
+    fpWaitPid(pid, status, 0);
+end;
+
+{ raw byte input for the endwin'ed (shell) screen. NB: ECHO must be
+  termio.ECHO — a bare ECHO resolves to ncurses' echo() function. IEXTEN
+  must go too, or ^O is eaten by the driver as the VDISCARD character;
+  ISIG goes so ^C at a pause is an ordinary byte, not a fatal SIGINT. }
+procedure ShellTtyRaw(out saved: TermIOS);
+var
+  t: TermIOS;
+begin
+  { endwin leaves the tty canonical: a plain read would wait for Enter }
+  TCGetAttr(0, saved);
+  t := saved;
+  t.c_lflag := t.c_lflag and
+               LongWord(not (ICANON or termio.ECHO or IEXTEN or ISIG));
+  t.c_cc[VMIN] := 1;
+  t.c_cc[VTIME] := 0;
+  TCSetAttr(0, TCSANOW, t);
+end;
+
+procedure WaitAnyKey;
+var
+  saved: TermIOS;
+  b: Char;
+begin
+  ShellTtyRaw(saved);
+  b := #0;
+  fpRead(0, b, 1);
+  TCSetAttr(0, TCSANOW, saved);
+end;
+{$endif}
+
+{ Pause = show "-- Press any key --" before returning to the panels
+  (user-menu commands: the user wants to read the output) }
+procedure ShellExec(const cmd, dir: AnsiString; Pause: Boolean = False);
 var
   old: AnsiString;
 begin
@@ -285,41 +409,44 @@ begin
   old := GetCurrentDir;
   SetCurrentDir(dir);
   {$ifdef unix}
-  fpSystem(cmd);
+  RunShell(cmd);
   {$endif}
   SetCurrentDir(old);
+  if Pause then
+  begin
+    WriteLn;
+    Write('-- Press any key --');
+    Flush(Output);
+    {$ifdef unix}
+    WaitAnyKey;
+    {$endif}
+  end;
   reset_prog_mode;
   refresh;
   ReloadPanels;
 end;
 
-{$ifdef unix}
-procedure WaitAnyKey;
-var
-  saved, t: TermIOS;
-  b: Char;
-begin
-  { endwin leaves the tty canonical: a plain read would wait for Enter }
-  TCGetAttr(0, saved);
-  t := saved;
-  t.c_lflag := t.c_lflag and LongWord(not (ICANON or ECHO));
-  t.c_cc[VMIN] := 1;
-  t.c_cc[VTIME] := 0;
-  TCSetAttr(0, TCSANOW, t);
-  fpRead(0, b, 1);
-  TCSetAttr(0, TCSANOW, saved);
-end;
-{$endif}
-
 procedure ShowUserScreen;
+{$ifdef unix}
+var
+  saved: TermIOS;
+  b: Char;
+{$endif}
 begin
+  { MC-style Ctrl-O: switch to the shell screen and stay there until
+    Ctrl-O (or Esc) switches back — other keys are ignored }
   def_prog_mode;
   endwin;
   WriteLn;
-  Write('-- Press any key --');
+  Write('-- Ctrl-O to return --');
   Flush(Output);
   {$ifdef unix}
-  WaitAnyKey;
+  ShellTtyRaw(saved);
+  repeat
+    b := #0;
+    if fpRead(0, b, 1) <= 0 then Break;
+  until b in [#3, #15, #27];   // Ctrl-C / Ctrl-O / Esc return
+  TCSetAttr(0, TCSANOW, saved);
   {$endif}
   reset_prog_mode;
   refresh;
@@ -398,7 +525,7 @@ begin
   if (cmd = 'cd') or (Copy(cmd, 1, 3) = 'cd ') then
     DoChangeDir(Copy(cmd, 3, MaxInt))
   else if cmd = 'exit' then
-    Quit := True
+    DoQuit
   else if ActiveP.Vfs.IsLocal then
     ShellExec(cmd, ActiveP.Path)
   else
@@ -465,6 +592,7 @@ end;
 procedure EnterOrLaunch;
 var
   av: TArchiveVFS;
+  mv: TMountVFS;
   items: TVfsItems;
   err, full: AnsiString;
 begin
@@ -472,6 +600,22 @@ begin
   begin
     ActiveP.EnterCurrent;
     Exit;
+  end;
+  { disk images (dmg, iso, …) auto-mount and open as directories }
+  if ActiveP.Vfs.IsLocal and IsImageName(ActiveP.CurFile.Name) then
+  begin
+    full := VfsJoin(ActiveP.Path, ActiveP.CurFile.Name);
+    if MountImage(full, mv, err) then
+    begin
+      ActiveP.SetVfs(mv, '');
+      Exit;
+    end;
+    { mount failed: .iso still opens read-only via the archive VFS }
+    if not IsArchiveName(ActiveP.CurFile.Name) then
+    begin
+      MsgBox('Mount', 'Cannot mount image:'#10 + err, ['OK']);
+      Exit;
+    end;
   end;
   { archives open as directories (DN 3.9) }
   if ActiveP.Vfs.IsLocal and IsArchiveName(ActiveP.CurFile.Name) then
@@ -514,7 +658,7 @@ begin
   endwin;
   WriteLn;
   {$ifdef unix}
-  fpSystem(cmd);
+  RunShell(cmd);
   {$endif}
   Write('-- Press any key --');
   Flush(Output);
@@ -760,16 +904,20 @@ var
 begin
   L := TStringList.Create;
   try
-    L.Add('DOS NAVIGATOR (FPC/ncurses edition)');
+    L.Add('DN - DataNavigator ' + DNVersion + ' (FPC/ncurses edition)');
     L.Add('');
     L.Add('Keys');
     L.Add('  Tab              switch active panel');
     L.Add('  Enter            enter directory');
     L.Add('  Backspace        go to parent directory');
-    L.Add('  Ins              select/deselect file');
+    L.Add('  Ins / Space      select/deselect file');
+    L.Add('  Alt-[ / Alt-]    move the panel split left / right');
+    L.Add('  Alt-=            reset the panel split to the middle');
+    L.Add('  Ctrl-O           show shell screen (Ctrl-O returns)');
     L.Add('  Ctrl-R           re-read both panels');
     L.Add('  Ctrl-T           Tetris');
     L.Add('  F1               this help');
+    L.Add('  F2               user menu (dn.mnu, see below)');
     L.Add('  F3               view file');
     L.Add('  F4               edit file (MicroEd)');
     L.Add('  F5 / F6          copy / move to the other panel');
@@ -777,19 +925,36 @@ begin
     L.Add('  F9               pull-down menu');
     L.Add('  F10              exit');
     L.Add('');
+    L.Add('Panels');
+    L.Add('  Left/Right menu > Columns...  pick Size / Date / Time columns');
+    L.Add('  Ctrl-G           count directory size (shows in Size column)');
+    L.Add('  Options > Panel setup > Exact sizes: bytes as 1,234,567');
+    L.Add('');
     L.Add('Mouse');
     L.Add('  click            move cursor / activate panel / menu');
     L.Add('  double click     enter directory');
     L.Add('  right click      invert selection');
     L.Add('  wheel            scroll panel under pointer');
     L.Add('  scrollbar        arrows = line, track = page');
+    L.Add('  drag title bar   move a window');
+    L.Add('  drag corner      resize a window (bottom-right)');
+    L.Add('  drag divider     change the panel split');
     L.Add('');
     L.Add('Virtual file systems');
     L.Add('  Enter on archive open zip/tar/7z/... as a directory');
+    L.Add('  Enter on image    mount dmg/iso/... as a directory (macOS)');
     L.Add('  cd sftp://u@host/  connect a remote (SFTP) panel');
     L.Add('  Ctrl-S            SSH session manager');
     L.Add('  Ctrl-W            read a file list into the panel');
     L.Add('  Ctrl-F7/F8        UU-encode / UU-decode');
+    L.Add('');
+    L.Add('User menu (F2)');
+    L.Add('  Entries live in dn.mnu: a local one in the panel directory');
+    L.Add('  wins over the global <config>/dn.mnu (edit both from the');
+    L.Add('  Options menu). Titles start at column 1, the indented lines');
+    L.Add('  below are the shell commands. Placeholders: %f file name,');
+    L.Add('  %p full path, %d panel dir, %D other panel dir,');
+    L.Add('  %s selected files, %% literal %.');
     L.Add('');
     L.Add('Windows (viewer, MicroEd editor)');
     L.Add('  F5               zoom / unzoom');
@@ -802,6 +967,18 @@ begin
     L.Add('original Dos Navigator by RIT Labs. Dos Navigator is');
     L.Add('Copyright (C) RIT Labs; all credit for the original design');
     L.Add('belongs to them.');
+    L.Add('');
+    L.Add('Software is a meme these days.');
+    L.Add('');
+    L.Add('I''m proud to say: Fable is the first model capable of passing');
+    L.Add('a test of reimplementing DN to modern product.');
+    L.Add('');
+    L.Add('Was it worth it? I bet so.');
+    L.Add('');
+    L.Add('Star, share, join my tg channel: https://t.me/My_CTO_Notes');
+    L.Add('');
+    L.Add('Best!');
+    L.Add('Gregory Pletnev');
     FocusWin := OpenTextView('Help', L);
   except
     L.Free;
@@ -809,10 +986,188 @@ begin
   end;
 end;
 
+procedure DoPanelSetup;
+var
+  f: array[0..2] of Boolean;
+begin
+  f[0] := Opt.ShowHidden;
+  f[1] := Opt.SpaceSelect;
+  f[2] := Opt.ExactSizes;
+  if not CheckListDialog('Panel setup',
+           ['Show hidden files', 'Space selects files',
+            'Exact sizes in bytes'], f) then Exit;
+  Opt.ShowHidden := f[0];
+  Opt.SpaceSelect := f[1];
+  Opt.ExactSizes := f[2];
+  OptSave;
+  ReloadPanels;
+end;
+
+{ column picker for one panel; the choice becomes the default for new
+  sessions (DN's "Column defaults") }
+procedure ColumnsDialog(P: TPanel);
+var
+  f: array[0..2] of Boolean;
+begin
+  f[0] := P.ColSize;
+  f[1] := P.ColDate;
+  f[2] := P.ColTime;
+  if not CheckListDialog('Columns', ['Size', 'Date', 'Time'], f) then Exit;
+  P.ColSize := f[0];
+  P.ColDate := f[1];
+  P.ColTime := f[2];
+  Opt.ColSize := f[0];
+  Opt.ColDate := f[1];
+  Opt.ColTime := f[2];
+  OptSave;
+end;
+
+procedure DoConfirmations;
+var
+  f: array[0..2] of Boolean;
+begin
+  f[0] := Opt.ConfirmDelete;
+  f[1] := Opt.ConfirmOverwrite;
+  f[2] := Opt.ConfirmExit;
+  if not CheckListDialog('Confirmations',
+           ['Confirm delete', 'Confirm overwrite', 'Confirm exit'], f) then
+    Exit;
+  Opt.ConfirmDelete := f[0];
+  Opt.ConfirmOverwrite := f[1];
+  Opt.ConfirmExit := f[2];
+  OptSave;
+end;
+
+{ highlight pairs sit on the panel bg, so re-apply after palette changes }
+procedure ApplyHlPairs;
+var
+  i: Integer;
+begin
+  for i := 1 to HlGroupCount do
+    SetHlPair(i, Opt.Hl[i].Color);
+end;
+
+procedure DoColors;
+var
+  i: Integer;
+begin
+  i := MsgBox('Colors', 'Color scheme:', ['Classic', 'Dark', 'Mono']);
+  if i < 0 then Exit;
+  Opt.Palette := i;
+  ApplyPalette(Opt.Palette);
+  ApplyHlPairs;
+  OptSave;
+end;
+
+procedure DoHighlight;
+begin
+  if not HighlightDialog(Opt.Hl) then Exit;
+  ApplyHlPairs;
+  OptSave;
+end;
+
+{ --- user menu (F2) ------------------------------------------------------ }
+
+procedure DoUserMenu;
+var
+  Menu: TUserMenu;
+  L, Sel: TStringList;
+  i, idx: Integer;
+  mfile, cmd, selstr, dir: AnsiString;
+begin
+  if ActiveP.Vfs.IsLocal then
+    mfile := UserMenuFile(ActiveP.Path)
+  else
+    mfile := GlobalMenuFile;
+  if not LoadUserMenu(mfile, Menu) or (Length(Menu) = 0) then
+  begin
+    if MsgBox('User menu', 'No user menu entries found.'#10 +
+              'Create a template menu and edit it?', ['Yes', 'No']) = 0 then
+    begin
+      EnsureGlobalMenu;
+      FocusWin := OpenEditor(GlobalMenuFile);
+    end;
+    Exit;
+  end;
+
+  L := TStringList.Create;
+  try
+    for i := 0 to High(Menu) do
+      L.Add(Menu[i].Title);
+    idx := ListDialog('User menu', L);
+  finally
+    L.Free;
+  end;
+  if idx < 0 then Exit;
+
+  Sel := TStringList.Create;
+  try
+    GetTargets(Sel);
+    selstr := '';
+    for i := 0 to Sel.Count - 1 do
+    begin
+      if selstr <> '' then selstr := selstr + ' ';
+      selstr := selstr + AnsiQuotedStr(Sel[i], '''');
+    end;
+  finally
+    Sel.Free;
+  end;
+
+  { a command that wants a file must have one: with the cursor on '..'
+    and nothing selected, "du -sh %s" would silently scan the whole dir }
+  if (selstr = '') and
+     ((Pos('%f', Menu[idx].Command) > 0) or
+      (Pos('%p', Menu[idx].Command) > 0) or
+      (Pos('%s', Menu[idx].Command) > 0)) then
+  begin
+    MsgBox('User menu', 'No file is selected.', ['OK']);
+    Exit;
+  end;
+
+  if ActiveP.Vfs.IsLocal then dir := ActiveP.Path else dir := GetCurrentDir;
+  cmd := ExpandUserCmd(Menu[idx].Command,
+                       ActiveP.CurFile.Name,
+                       VfsJoin(ActiveP.Path, ActiveP.CurFile.Name),
+                       ActiveP.Path, OtherPanel.Path, selstr);
+  ShellExec(cmd, dir, True);
+end;
+
+procedure DoMenuEdit(GlobalMenu: Boolean);
+var
+  path: AnsiString;
+  f: Text;
+begin
+  if GlobalMenu then
+  begin
+    EnsureGlobalMenu;
+    path := GlobalMenuFile;
+  end
+  else
+  begin
+    if not ActiveP.Vfs.IsLocal then
+    begin
+      MsgBox('User menu', 'A local menu needs a local directory.', ['OK']);
+      Exit;
+    end;
+    path := VfsJoin(ActiveP.Path, 'dn.mnu');
+    if not FileExists(path) then
+    begin
+      Assign(f, path);
+      {$I-} Rewrite(f); {$I+}
+      if IOResult = 0 then
+      begin
+        WriteLn(f, '# local user menu for ', ActiveP.Path);
+        Close(f);
+      end;
+    end;
+  end;
+  FocusWin := OpenEditor(path);
+end;
+
 procedure ExecCmd(cmd: Integer);
 begin
   case cmd of
-    cmQuit: Quit := True;
+    cmQuit: DoQuit;
     cmRereadLeft: LeftP.Load;
     cmRereadRight: RightP.Load;
     cmRereadAll: ReloadPanels;
@@ -833,6 +1188,15 @@ begin
     cmSftpConnect: DoSftpConnect;
     cmUUEncode: DoUUEncode;
     cmUUDecode: DoUUDecode;
+    cmPanelSetup: DoPanelSetup;
+    cmConfirmations: DoConfirmations;
+    cmColors: DoColors;
+    cmHighlight: DoHighlight;
+    cmUserMenu: DoUserMenu;
+    cmMenuEditGlobal: DoMenuEdit(True);
+    cmMenuEditLocal: DoMenuEdit(False);
+    cmColumnsLeft: ColumnsDialog(LeftP);
+    cmColumnsRight: ColumnsDialog(RightP);
   end;
 end;
 
@@ -918,7 +1282,7 @@ procedure DoFKey(n: Integer);
 begin
   case n of
     1: DoHelp;
-    2: MsgBox('User menu', 'The user menu is not implemented yet.', ['OK']);
+    2: DoUserMenu;
     3: DoView;
     4: DoEdit;
     5: DoCopyOrMove(False);
@@ -926,7 +1290,7 @@ begin
     7: DoMkDir;
     8: DoDelete;
     9: OpenMenu(0);
-    10: Quit := True;
+    10: DoQuit;
   end;
 end;
 
@@ -955,6 +1319,40 @@ begin
   LogMouse(me);
   press := (me.bstate and (mbtn1Pressed or mbtn1Clicked or mbtn1Double or
                            mbtn1Triple)) <> 0;
+
+  { active drag: motion events move/resize, release ends it }
+  if Drag <> dmNone then
+  begin
+    if (Drag <> dmSplit) and (WinIndex(DragWin) < 0) then
+    begin
+      Drag := dmNone;   // the window vanished under the pointer
+      DragWin := nil;
+      Exit;
+    end;
+    if (me.bstate and mbtn1Released) <> 0 then
+    begin
+      Drag := dmNone;
+      DragWin := nil;
+      Exit;
+    end;
+    case Drag of
+      dmMoveWin:
+        begin
+          DragWin.X := me.x - DragOffX;
+          DragWin.Y := me.y - DragOffY;
+          DragWin.ClampToDesk;
+        end;
+      dmResizeWin:
+        begin
+          DragWin.W := me.x - DragWin.X + 1;
+          DragWin.H := me.y - DragWin.Y + 1;
+          DragWin.ClampToDesk;
+        end;
+      dmSplit:
+        SetSplit(me.x);
+    end;
+    Exit;
+  end;
 
   { menu bar (DN: <L> on menu bar) }
   if me.y = 0 then
@@ -999,12 +1397,35 @@ begin
         w.ZoomToggle;
         Exit;
       end;
+      if me.y = w.Y then
+      begin
+        { grab the title bar: move the window }
+        Drag := dmMoveWin;
+        DragWin := w;
+        DragOffX := me.x - w.X;
+        DragOffY := me.y - w.Y;
+        Exit;
+      end;
+      if (me.y = w.Y + w.H - 1) and (me.x = w.X + w.W - 1) then
+      begin
+        { grab the bottom-right corner: resize }
+        Drag := dmResizeWin;
+        DragWin := w;
+        Exit;
+      end;
     end;
     w.HandleClick(me.x, me.y, me.bstate);
     Exit;
   end;
   if press then
     FocusWin := nil;   // clicking the panels focuses them
+
+  { grab the divider between the panels: change the split }
+  if press and (me.x = RightP.X0) and (me.y >= 1) and (me.y <= LINES - 3) then
+  begin
+    Drag := dmSplit;
+    Exit;
+  end;
 
   if me.x < LeftP.W then p := LeftP else p := RightP;
 
@@ -1175,6 +1596,8 @@ begin
   else
     if (ch >= KEY_F0 + 1) and (ch <= KEY_F0 + 10) then
       DoFKey(ch - KEY_F0)
+    else if (ch = 32) and Opt.SpaceSelect and (CmdLine = '') then
+      ActiveP.ToggleSelect                 // MC-style Space select
     else if (CmdLine = '') and (ch in [Ord('+'), Ord('-'), Ord('*')]) then
     begin
       { DN 2.3: select / deselect / invert by mask }
@@ -1189,9 +1612,16 @@ begin
     end
     else if (ch >= 3000 + 32) and (ch < 3000 + 127) then
     begin
-      { Alt+letter: S = sort dialog, others = quick jump (DN 2.10) }
+      { Alt+letter: S = sort dialog, [ ] = = panel split,
+        others = quick jump (DN 2.10) }
       if Chr(ch - 3000) in ['s', 'S'] then
         SortDialog(ActiveP)
+      else if ch = 3000 + Ord('[') then
+        SetSplit(RightP.X0 - 2)
+      else if ch = 3000 + Ord(']') then
+        SetSplit(RightP.X0 + 2)
+      else if ch = 3000 + Ord('=') then
+        PanelSplit := 0
       else
         ActiveP.QuickJump(Chr(ch - 3000));
     end
@@ -1208,10 +1638,21 @@ var
   startL, startR: AnsiString;
 
 begin
+  {$ifdef unix}
+  { the tty gives Ctrl-C to dn as a plain key (raw mode), but a SIGINT
+    can still arrive while a shell command runs — it must kill the
+    command (RunShell resets the child), never the file manager }
+  fpSignal(SIGINT, SignalHandler(SIG_IGN));
+  fpSignal(SIGQUIT, SignalHandler(SIG_IGN));
+  {$endif}
+  {$ifdef darwin}
+  SetupTerminfo;
+  {$endif}
   if ParamCount >= 1 then startL := ParamStr(1) else startL := GetCurrentDir;
   if ParamCount >= 2 then startR := ParamStr(2) else startR := GetUserDir;
   CmdHist := TStringList.Create;
   HistoryLoad(CmdHist);
+  OptLoad;
   LeftP := TPanel.Create(startL);
   RightP := TPanel.Create(startR);
   LeftP.Active := True;
@@ -1219,6 +1660,8 @@ begin
   ActiveP := LeftP;
 
   ScrInit;
+  ApplyPalette(Opt.Palette);
+  ApplyHlPairs;
   RedrawBase := @DrawBase;
   try
     timeout(1000);  // wake up every second for the clock

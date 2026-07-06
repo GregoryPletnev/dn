@@ -1,8 +1,20 @@
-# Dos Navigator FPC (OSX / Linux)
+Software is a meme these days. 
 
-A recreation of the classic [Dos Navigator](original/) look and feel using
-modern tools: Free Pascal + ncurses, for a fast, keyboard-driven file
-management experience in the terminal.
+I'm proud to say: Fable  is the first model capable of passing a test of reimplementing DN to modern product.
+
+Was it worth it? I bet so.
+
+Star, share, join my tg channel: https://t.me/My_CTO_Notes
+
+Best!
+Gregory Pletnev
+
+# DN - DataNavigator (OSX / Linux)
+
+**DN - DataNavigator** is a recreation of the classic
+[Dos Navigator](original/) look and feel using modern tools: Free Pascal +
+ncurses, for a fast, keyboard-driven file management experience in the
+terminal.
 
 The original Turbo Pascal sources live under `original/` and serve as the
 reference for behavior and appearance; the new code under `src/` is written
@@ -30,6 +42,38 @@ make test   # builds and runs the TUI test suite
 `bin/dn [left-dir [right-dir]]` — optional arguments set the starting
 directory of each panel.
 
+## Distribution (macOS, Apple Silicon)
+
+```sh
+make dmg                                  # dist/DN-DataNavigator-<version>-arm64.dmg
+VERSION=1.2.0 scripts/build-dmg.sh        # override the version
+```
+
+Builds `DN - DataNavigator.app` (double-clicking it opens `dn` in Terminal),
+bundles the Homebrew ncurses dylib inside the app so it runs on machines
+without Homebrew, signs it and packs everything into a compressed DMG with
+an `/Applications` symlink. By default the signature is ad-hoc, so users
+need right-click > Open on first launch; for Gatekeeper-clean distribution
+pass a Developer ID via `CODESIGN_IDENTITY=...` and notarize the DMG.
+
+The app icon (`assets/dn.icns`) is derived from the original `DN.ICO`
+pixel art — the compass and the letters restyled to the macOS squircle
+format; regenerate it with `python3 scripts/make-icon.py` (needs
+ImageMagick).
+
+## Distribution (Debian/Ubuntu)
+
+```sh
+make deb                                  # dist/dn-datanavigator_<version>_<arch>.deb
+VERSION=1.2.0 scripts/build-deb.sh        # override the version
+```
+
+Runs on a Debian/Ubuntu machine (needs `fpc`, `libncursesw5-dev` and
+`dpkg-deb`): builds the binary and packs `/usr/bin/dn` with a desktop
+entry, the icon and doc files. Depends on `libncursesw6`; `bsdtar`
+(libarchive-tools) and `openssh-client` are recommended for the archive
+and SFTP panels.
+
 ## Testing
 
 Two layers, both run by `make test`:
@@ -51,10 +95,11 @@ Two layers, both run by `make test`:
 | ↑ ↓ PgUp PgDn Home End | Move cursor |
 | Enter | Enter directory |
 | Backspace | Go to parent directory |
-| Insert | Select/deselect file |
+| Insert / Space | Select/deselect file (Space is MC-style, off in Options → Panel setup) |
 | Ctrl+R | Reread both panels |
 | Ctrl+T | Tetris (also Tools → Tetris) |
 | F1 | Help |
+| F2 | User menu (`dn.mnu`, see below) |
 | F3 | View file (in a window) |
 | F4 | Edit file in MicroEd, the built-in DN editor (in a window) |
 | F5 / F6 | Copy / move selection (or current file) to the other panel |
@@ -63,20 +108,41 @@ Two layers, both run by `make test`:
 | F9 | Pull-down menu (arrows, Enter, Esc; fully mouse-driven too) |
 | F10 | Exit (asks about unsaved editors) |
 | Alt+S | Sort panel: name / ext / size / date / unsorted |
+| Alt+[ / Alt+] | Move the panel split left / right (Alt+= resets) |
 | Alt+letter | Quick jump to the next file starting with that letter |
 | + / - / * | Select / deselect by mask, invert selection |
 | Ctrl+U | Swap panels |
 | Ctrl+G | Count directory size (shown in the Size column) |
+| Left/Right → Columns… | Pick panel columns: Size / Date / Time (saved as default) |
+| Options → Panel setup | Hidden files, Space select, exact sizes (1,234,567) |
 | Ctrl+C | Compare directories: select files that differ |
-| Ctrl+O | User screen (output of executed commands) |
+| Ctrl+O | Shell screen toggle, MC-style (Ctrl+O / Esc returns) |
 | Ctrl+E / Ctrl+X | Command history: previous / next |
 | Ctrl+F | Insert current filename into the command line |
 | Ctrl+S | SSH session manager |
 | Ctrl+W | Read a file list into the panel (virtual listing) |
 | Ctrl+F7 / Ctrl+F8 | UU-encode / UU-decode the current file |
 
-F2 (user menu) is a placeholder; the Options menu still shows a disabled
-entry.
+## User menu (F2)
+
+Entries live in `dn.mnu`: a local one in the panel directory overrides
+the global `<config>/dn.mnu` (DN's Local/Global menu definition — both
+editable from the Options menu; a template is created on first use).
+Format:
+
+```
+# comment
+Show file type
+	file %p
+Pack selection
+	tar czvf selection.tar.gz %s
+```
+
+Titles start at column 1, the indented lines below are the shell
+commands. Placeholders: `%f` file name, `%p` full path, `%d` panel dir,
+`%D` other panel dir, `%s` selected files (each quoted), `%%` literal
+percent. Output is shown on the shell screen with a "press any key"
+pause.
 
 ## Virtual file systems
 
@@ -155,7 +221,9 @@ Implemented (works in Terminal.app / iTerm2 via xterm mouse reporting):
 | Scrollbar: click arrows — line up/down | ✔ |
 | Scrollbar: click track above/below thumb — page up/down | ✔ (simplified DN semantics) |
 | Mouse wheel — scroll panel under pointer | ✔ (modern extension) |
-| Drag operations (panel resize, copy by drag, scrollbar drag) | ✖ needs motion tracking, planned |
+| Drag: window by title bar, resize by bottom-right corner | ✔ (xterm 1002 motion tracking) |
+| Drag: panel divider — change the split (also Alt+[ / Alt+] / Alt+= ) | ✔ |
+| Drag: copy files by drag, scrollbar thumb drag | ✖ planned |
 | Window ops: click to focus/raise, [■] close, [↕] zoom, click in editor sets cursor, wheel scrolls | ✔ |
 | Tree panel, ASCII table | ✖ blocked on those widgets existing |
 
@@ -179,10 +247,13 @@ sequence (used by the tests).
 ## Status
 
 Working: dual panels (classic DN look), full mouse support, pull-down
-menus, the multi-window desktop (viewer and editor windows), MicroEd,
-file operations F5/F6/F7/F8 with dialogs, help (F1), Tetris. Not yet:
-command line execution, Disk and Options menus, user menu (F2), drag
-operations (window drag/resize by mouse, panel width).
+menus (including Disk and Options), command line execution, the user
+menu (F2), the multi-window desktop (viewer and editor windows),
+MicroEd, file operations F5/F6/F7/F8 with dialogs, virtual file systems
+(archives, disk images, SFTP), configurable colors and confirmations,
+window drag/resize by mouse, panel split (mouse or Alt+[ / Alt+]),
+help (F1), Tetris. Not yet: copying files by mouse drag, scrollbar
+thumb drag.
 
 Known limitations:
 

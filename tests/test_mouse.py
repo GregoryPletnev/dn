@@ -121,7 +121,7 @@ def test_fkey_bar_click_runs_operation(dn):
 
 def test_fkey_bar_click_opens_help(dn):
     dn.mouse(2, 23)                     # slot 1 = Help
-    dn.wait_text('DOS NAVIGATOR')
+    dn.wait_text('DN - DataNavigator')
     dn.send('q')
     dn.wait_text('Name')                # panels back
     assert dn.alive()

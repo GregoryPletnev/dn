@@ -43,13 +43,77 @@ begin
   Result := True;
 end;
 
+{ Make a line safe to draw: expand tabs (8-col stops), replace control
+  bytes and broken UTF-8 with '·'. ncurses would otherwise render tabs
+  and ^X control pairs wider than we counted and spill over the frame. }
+function SanitizeLine(const src: AnsiString): AnsiString;
+var
+  i, k, n, col: Integer;
+  b: Byte;
+  ok: Boolean;
+begin
+  Result := '';
+  col := 0;
+  i := 1;
+  while i <= Length(src) do
+  begin
+    b := Ord(src[i]);
+    if b = 9 then
+    begin
+      n := 8 - (col mod 8);
+      Result := Result + StringOfChar(' ', n);
+      Inc(col, n);
+      Inc(i);
+    end
+    else if (b < 32) or (b = 127) then
+    begin
+      Result := Result + '·';
+      Inc(col);
+      Inc(i);
+    end
+    else if b < 128 then
+    begin
+      Result := Result + src[i];
+      Inc(col);
+      Inc(i);
+    end
+    else
+    begin
+      { multi-byte UTF-8: copy only complete, valid sequences }
+      n := 0;
+      if (b and $E0) = $C0 then n := 1
+      else if (b and $F0) = $E0 then n := 2
+      else if (b and $F8) = $F0 then n := 3;
+      ok := (n > 0) and (i + n <= Length(src));
+      if ok then
+        for k := 1 to n do
+          if (Ord(src[i + k]) and $C0) <> $80 then ok := False;
+      if ok then
+      begin
+        Result := Result + Copy(src, i, n + 1);
+        Inc(col);
+        Inc(i, n + 1);
+      end
+      else
+      begin
+        Result := Result + '·';
+        Inc(col);
+        Inc(i);
+      end;
+    end;
+  end;
+end;
+
 constructor TViewWin.CreateView(const ATitle: AnsiString; AContent: TStringList);
 var
   rx, ry, rw, rh: Integer;
+  i: Integer;
 begin
   NextRect(rx, ry, rw, rh);
   inherited Create(rx, ry, rw, rh, ATitle);
   Content := AContent;
+  for i := 0 to Content.Count - 1 do
+    Content[i] := SanitizeLine(Content[i]);
   Top := 0;
   Ofs := 0;
 end;
@@ -81,10 +145,10 @@ begin
   for j := 0 to H - 3 do
   begin
     if Top + j < Content.Count then
-      s := Copy(Content[Top + j], Ofs + 1, cw)
+      s := Utf8Copy(Content[Top + j], Ofs + 1, cw)
     else
       s := '';
-    PutStr(Y + 1 + j, X + 1, PadRight(s, cw), cpViewer);
+    PutStr(Y + 1 + j, X + 1, Utf8PadRight(s, cw), cpViewer);
   end;
 end;
 

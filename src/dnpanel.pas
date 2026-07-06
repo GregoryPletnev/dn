@@ -6,7 +6,7 @@ unit dnpanel;
 interface
 
 uses
-  SysUtils, Classes, ncurses, dnscreen, dnvfs;
+  SysUtils, Classes, ncurses, dnscreen, dnvfs, dnoptions;
 
 type
   TSortMode = (smName, smExt, smSize, smDate, smUnsorted);
@@ -29,6 +29,8 @@ type
     Active: Boolean;
     SortMode: TSortMode;
     Mask: AnsiString;        // file mask filter, '' = all
+    { visible columns (Left/Right menu > Columns...); Name is always on }
+    ColSize, ColDate, ColTime: Boolean;
     Vfs: TVFS;               // never nil; LocalVFS by default
     constructor Create(const APath: AnsiString);
     destructor Destroy; override;
@@ -99,8 +101,33 @@ begin
   end;
 end;
 
-function FmtSize(Size: Int64): AnsiString;
+{ color pair for a file matching a highlight group, 0 = no match }
+function HlPairFor(const Name: AnsiString): Integer;
+var
+  i: Integer;
 begin
+  Result := 0;
+  for i := 1 to HlGroupCount do
+    if (Opt.Hl[i].Mask <> '') and MatchMask(Name, Opt.Hl[i].Mask) then
+      Exit(cpHl1 + i - 1);
+end;
+
+function FmtSize(Size: Int64): AnsiString;
+var
+  i: Integer;
+begin
+  if Opt.ExactSizes then
+  begin
+    { thousands-separated bytes while they fit the 9-char column }
+    Result := IntToStr(Size);
+    i := Length(Result) - 3;
+    while i >= 1 do
+    begin
+      Insert(',', Result, i + 1);
+      Dec(i, 3);
+    end;
+    if Length(Result) <= 9 then Exit;
+  end;
   if Size < 10000000 then
     Result := IntToStr(Size)
   else if Size < Int64(10240) * 1024 * 1024 then
@@ -161,6 +188,9 @@ begin
   Top := 0;
   SortMode := smName;
   Mask := '';
+  ColSize := Opt.ColSize;
+  ColDate := Opt.ColDate;
+  ColTime := Opt.ColTime;
   Load;
 end;
 
@@ -214,6 +244,8 @@ begin
   if Vfs.List(Path, items, err) then
     for i := 0 to High(items) do
     begin
+      if not Opt.ShowHidden and (items[i].Name <> '') and
+         (items[i].Name[1] = '.') then Continue;
       if (Mask <> '') and not items[i].IsDir and
          not MatchMask(items[i].Name, Mask) then Continue;
       SetLength(Files, n + 1);
@@ -253,16 +285,51 @@ end;
 
 procedure TPanel.Draw;
 const
-  SzW = 9;   // size column
-  DtW = 8;   // date column "mm-dd-yy"
+  MaxCols = 3;
+  ColW: array[0..MaxCols - 1] of Integer = (9, 8, 5);   // Size, Date, Time
+  ColTitle: array[0..MaxCols - 1] of AnsiString = ('Size ', 'Date ', 'Time ');
 var
-  inner, NmW, i, row, idx, pair: Integer;
-  title, line, nm, sz, dt: AnsiString;
+  inner, NmW, i, row, idx, pair, c, nc, x: Integer;
+  title, line, nm: AnsiString;
   bold: Boolean;
   f: TFileRec;
+  cols: array[0..MaxCols - 1] of Integer;   // active column kinds, in order
+  cell: array[0..MaxCols - 1] of AnsiString;
+
+  function CellText(const fr: TFileRec; kind: Integer): AnsiString;
+  begin
+    case kind of
+      0: if fr.IsDir then
+         begin
+           if fr.Name = '..' then Result := '>UP--DIR<'
+           else if fr.SizeKnown then Result := FmtSize(fr.Size)
+           else Result := '>SUB-DIR<';
+         end
+         else
+           Result := FmtSize(fr.Size);
+      1: if fr.MTime > 0 then Result := FormatDateTime('mm-dd-yy', fr.MTime)
+         else Result := '';
+    else
+      if fr.MTime > 0 then Result := FormatDateTime('hh:nn', fr.MTime)
+      else Result := '';
+    end;
+    Result := PadLeft(Result, ColW[kind]);
+  end;
+
 begin
   inner := W - 2;
-  NmW := inner - SzW - DtW - 2;
+
+  { active columns; drop the rightmost ones if the panel is too narrow }
+  nc := 0;
+  if ColSize then begin cols[nc] := 0; Inc(nc); end;
+  if ColDate then begin cols[nc] := 1; Inc(nc); end;
+  if ColTime then begin cols[nc] := 2; Inc(nc); end;
+  repeat
+    NmW := inner;
+    for c := 0 to nc - 1 do
+      Dec(NmW, ColW[cols[c]] + 1);
+    if (NmW < 8) and (nc > 0) then Dec(nc) else Break;
+  until False;
 
   { top border with centered path title }
   title := ' ' + DisplayPath + ' ';
@@ -278,10 +345,13 @@ begin
   { column headers }
   PutStr(2, X0, bxV, cpFrame, True);
   PutStr(2, X0 + 1, PadRight(' Name', NmW), cpSelected, True);
-  PutStr(2, X0 + 1 + NmW, bxColV, cpFrame, True);
-  PutStr(2, X0 + 1 + NmW + 1, PadLeft('Size ', SzW), cpSelected, True);
-  PutStr(2, X0 + 1 + NmW + 1 + SzW, bxColV, cpFrame, True);
-  PutStr(2, X0 + 1 + NmW + 1 + SzW + 1, PadLeft('Date ', DtW), cpSelected, True);
+  x := X0 + 1 + NmW;
+  for c := 0 to nc - 1 do
+  begin
+    PutStr(2, x, bxColV, cpFrame, True);
+    PutStr(2, x + 1, PadLeft(ColTitle[cols[c]], ColW[cols[c]]), cpSelected, True);
+    x := x + 1 + ColW[cols[c]];
+  end;
   PutStr(2, X0 + W - 1, bxV, cpFrame, True);
 
   { file rows }
@@ -309,18 +379,8 @@ begin
     begin
       f := Files[idx];
       nm := Utf8PadRight(f.Name, NmW);
-      if f.IsDir then
-      begin
-        if f.Name = '..' then sz := PadLeft('>UP--DIR<', SzW)
-        else if f.SizeKnown then sz := PadLeft(FmtSize(f.Size), SzW)
-        else sz := PadLeft('>SUB-DIR<', SzW);
-      end
-      else
-        sz := PadLeft(FmtSize(f.Size), SzW);
-      if f.MTime > 0 then
-        dt := FormatDateTime('mm-dd-yy', f.MTime)
-      else
-        dt := StringOfChar(' ', DtW);
+      for c := 0 to nc - 1 do
+        cell[c] := CellText(f, cols[c]);
       bold := f.IsDir;
       if Active and (idx = Cur) then
       begin
@@ -335,27 +395,38 @@ begin
       else if f.IsDir then
         pair := cpDir
       else
-        pair := cpFile;
+      begin
+        pair := HlPairFor(f.Name);
+        if pair = 0 then pair := cpFile;
+      end;
       PutStr(row, X0 + 1, nm, pair, bold);
-      PutStr(row, X0 + 1 + NmW, bxColV, cpFrame, True);
-      PutStr(row, X0 + 1 + NmW + 1, sz, pair, bold);
-      PutStr(row, X0 + 1 + NmW + 1 + SzW, bxColV, cpFrame, True);
-      PutStr(row, X0 + 1 + NmW + 1 + SzW + 1, PadLeft(dt, DtW), pair, bold);
+      x := X0 + 1 + NmW;
+      for c := 0 to nc - 1 do
+      begin
+        PutStr(row, x, bxColV, cpFrame, True);
+        PutStr(row, x + 1, cell[c], pair, bold);
+        x := x + 1 + ColW[cols[c]];
+      end;
     end
     else
     begin
       PutStr(row, X0 + 1, StringOfChar(' ', NmW), cpFile);
-      PutStr(row, X0 + 1 + NmW, bxColV, cpFrame, True);
-      PutStr(row, X0 + 1 + NmW + 1, StringOfChar(' ', SzW), cpFile);
-      PutStr(row, X0 + 1 + NmW + 1 + SzW, bxColV, cpFrame, True);
-      PutStr(row, X0 + 1 + NmW + 1 + SzW + 1, StringOfChar(' ', DtW), cpFile);
+      x := X0 + 1 + NmW;
+      for c := 0 to nc - 1 do
+      begin
+        PutStr(row, x, bxColV, cpFrame, True);
+        PutStr(row, x + 1, StringOfChar(' ', ColW[cols[c]]), cpFile);
+        x := x + 1 + ColW[cols[c]];
+      end;
     end;
   end;
 
   { separator + mini-status }
-  PutStr(H - 1, X0,
-    bxSepL + Rep(bxSepH, NmW) + bxColB + Rep(bxSepH, SzW) + bxColB + Rep(bxSepH, DtW) + bxSepR,
-    cpFrame, True);
+  line := bxSepL + Rep(bxSepH, NmW);
+  for c := 0 to nc - 1 do
+    line := line + bxColB + Rep(bxSepH, ColW[cols[c]]);
+  line := line + bxSepR;
+  PutStr(H - 1, X0, line, cpFrame, True);
   f := CurFile;
   if f.Name <> '' then
   begin

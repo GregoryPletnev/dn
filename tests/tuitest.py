@@ -246,6 +246,22 @@ class TuiSession:
         self.send(seq)
         time.sleep(0.05)
 
+    def drag(self, x0, y0, x1, y1, steps=4):
+        """Button-1 drag: press at (x0, y0), motion events along the way,
+        release at (x1, y1). Requires the app to enable xterm 1002.
+        Events go out separately with gaps: batched into one read, ncurses
+        swallows the press and the drag never starts."""
+        time.sleep(0.2)
+        self.send(self._mouse_event(0, x0, y0, True))
+        for i in range(1, steps + 1):
+            xi = x0 + (x1 - x0) * i // steps
+            yi = y0 + (y1 - y0) * i // steps
+            time.sleep(0.08)
+            self.send(self._mouse_event(32, xi, yi, True))  # motion, held
+        time.sleep(0.08)
+        self.send(self._mouse_event(0, x1, y1, False))
+        time.sleep(0.05)
+
     def click_on(self, text, button='left', clicks=1, panel=None):
         """Click on the first row containing `text`. `panel` = 'left'/'right'
         restricts the search to that half of the screen."""

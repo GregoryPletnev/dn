@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DN - DataNavigator — Dos Navigator для современного терминала</title>
+<meta name="description" content="DN - DataNavigator: воссоздание классического Dos Navigator на Free Pascal + ncurses для macOS и Linux. Панели, архивы как каталоги, SFTP, MicroEd и тетрис.">
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --panel: #0000aa;
+    --panel-deep: #000066;
+    --cyan: #00e5ff;
+    --cyan-dim: #4db8c4;
+    --yellow: #ffd75f;
+    --white: #e8ecf5;
+    --gray: #8b93a7;
+    --green: #39d353;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--white);
+    font-family: var(--mono);
+    line-height: 1.6;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  /* --- hero --------------------------------------------------------- */
+  header { padding: 72px 0 48px; text-align: center; }
+  header img {
+    width: 128px; height: 128px;
+    display: block; margin: 0 auto 24px;
+  }
+  h1 { font-size: 2.2rem; letter-spacing: .02em; }
+  h1 .dn { color: var(--cyan); }
+  .tagline { color: var(--gray); margin-top: 12px; font-size: 1.05rem; }
+  .badges { margin-top: 20px; color: var(--cyan-dim); font-size: .85rem; }
+  .badges span { white-space: nowrap; }
+  .badges span + span::before { content: "  ·  "; color: var(--gray); }
+
+  .cta { margin-top: 36px; }
+  .btn {
+    display: inline-block;
+    padding: 14px 28px;
+    border: 2px solid var(--cyan);
+    color: var(--bg);
+    background: var(--cyan);
+    text-decoration: none;
+    font-weight: 700;
+    font-family: var(--mono);
+  }
+  .btn:hover { background: transparent; color: var(--cyan); }
+  .btn.ghost {
+    background: transparent; color: var(--cyan);
+    margin-left: 12px;
+  }
+  .btn.ghost:hover { background: var(--cyan); color: var(--bg); }
+  .cta-note { margin-top: 14px; color: var(--gray); font-size: .85rem; }
+
+  /* --- fake DN screen ------------------------------------------------ */
+  .screen {
+    background: var(--panel);
+    border: 1px solid #223;
+    border-radius: 8px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.5);
+    overflow-x: auto;
+    margin: 40px 0 0;
+  }
+  .screen pre {
+    font-size: 13px;
+    line-height: 1.35;
+    padding: 14px 18px;
+    color: var(--cyan);
+    min-width: 660px;
+  }
+  .screen .t  { color: #000; background: #00aaaa; }
+  .screen .w  { color: #fff; font-weight: 700; }
+  .screen .y  { color: var(--yellow); }
+  .screen .g  { color: var(--green); }
+  .screen .c  { color: #00aaaa; }
+
+  /* --- sections ------------------------------------------------------ */
+  section { padding: 56px 0 8px; }
+  h2 {
+    color: var(--yellow);
+    font-size: 1.25rem;
+    margin-bottom: 24px;
+  }
+  h2::before { content: "═══ "; color: var(--panel); -webkit-text-stroke: .5px var(--cyan-dim); color: var(--cyan-dim); }
+  h2::after  { content: " ═══"; color: var(--cyan-dim); }
+  p.lead { color: var(--white); max-width: 70ch; margin-bottom: 16px; }
+  p.lead b { color: var(--cyan); }
+  .muted { color: var(--gray); }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    margin-top: 8px;
+  }
+  .card {
+    border: 1px solid #232b42;
+    background: #0e1426;
+    padding: 20px;
+  }
+  .card h3 { color: var(--cyan); font-size: 1rem; margin-bottom: 8px; }
+  .card h3 .k { color: var(--yellow); }
+  .card p { color: var(--gray); font-size: .9rem; }
+
+  /* --- download ------------------------------------------------------ */
+  .dl {
+    border: 1px solid #232b42;
+    background: #0e1426;
+    padding: 24px;
+    margin-top: 8px;
+  }
+  .dl code {
+    display: block;
+    background: #060a14;
+    color: var(--green);
+    padding: 12px 16px;
+    margin: 10px 0;
+    overflow-x: auto;
+    white-space: pre;
+    font-size: .85rem;
+  }
+  .dl p { color: var(--gray); font-size: .9rem; }
+  a { color: var(--cyan); }
+
+  footer {
+    margin-top: 72px;
+    padding: 32px 0 48px;
+    border-top: 1px solid #232b42;
+    color: var(--gray);
+    font-size: .85rem;
+    text-align: center;
+  }
+  footer p { max-width: 75ch; margin: 0 auto 10px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <img src="dn-icon.png" alt="Иконка DN - DataNavigator: пиксельный компас">
+    <h1><span class="dn">DN</span> - DataNavigator</h1>
+    <p class="tagline">Тот самый Dos Navigator — заново, для современного терминала.<br>
+    Free Pascal + ncurses · macOS (Apple Silicon) и Linux</p>
+
+    <div class="cta">
+      <a class="btn" href="DN-DataNavigator-1.1.0-arm64.dmg">Скачать DMG (arm64)</a>
+      <a class="btn ghost" href="https://t.me/My_CTO_Notes">TG-канал автора</a>
+    </div>
+    <p class="cta-note">Перетащил в Applications — работает. Без Homebrew и зависимостей.</p>
+
+    <div class="screen" role="img" aria-label="Скриншот: два синих файловых панели в стиле Dos Navigator">
+<pre>
+<span class="t">  Left    Files    Disk    Commands    Tools    Options    Right      13:59:13 </span>
+╔═══════════ <span class="t"> /Users/count </span> ═══════════╗╔═══════════ /Users/count/ ═══════════╗
+║ <span class="y">Name</span>            │    <span class="y">Size</span> │    <span class="y">Date</span> ║║ <span class="y">Name</span>           │    <span class="y">Size</span> │    <span class="y">Date</span> ║
+║<span class="t">..               </span>│<span class="w">&gt;UP--DIR&lt;</span>│         ║║<span class="w">..              </span>│<span class="w">&gt;UP--DIR&lt;</span>│         ║
+║<span class="w">Projects         </span>│<span class="w">&gt;SUB-DIR&lt;</span>│ 07-06-26║║<span class="w">Documents       </span>│<span class="w">&gt;SUB-DIR&lt;</span>│ 07-06-26║
+║<span class="g">deploy.sh        </span>│      842│ 06-15-26║║<span class="y">backup.tar.gz   </span>│  187,725│ 09-04-26║
+║report.pdf       │  254,322│ 09-07-26║║notes.md        │    2,860│ 10-29-26║
+║<span class="y">sources.zip      </span>│1,154,423│ 07-04-26║║demo.png        │  356,042│ 09-25-26║
+╟─────────────────┴─────────┴─────────╢╟────────────────┴─────────┴─────────╢
+║ Projects                            ║║ backup.tar.gz  187,725  09-04 17:30║
+╚═════════════════════════════════════╝╚════════════════════════════════════╝
+/Users/count&gt;<span class="t"> </span>
+<span class="t"> 1</span><span class="c">Help  </span><span class="t"> 2</span><span class="c">UserMn</span><span class="t"> 3</span><span class="c">View  </span><span class="t"> 4</span><span class="c">Edit  </span><span class="t"> 5</span><span class="c">Copy  </span><span class="t"> 6</span><span class="c">RenMov</span><span class="t"> 7</span><span class="c">MkDir </span><span class="t"> 8</span><span class="c">Delete</span><span class="t"> 9</span><span class="c">PullDn</span><span class="t">10</span><span class="c">Exit  </span>
+</pre>
+    </div>
+  </header>
+
+  <section>
+    <h2>Что это</h2>
+    <p class="lead">Воссоздание классического <b>Dos Navigator</b> от RIT Labs —
+    двухпанельного файлового менеджера из 90-х — написанное с нуля на
+    Free Pascal и ncurses. Оригинальные исходники на Turbo Pascal служили
+    референсом поведения и внешнего вида; код новый, под Unix-терминалы.</p>
+    <p class="lead muted">Синие панели, жёлтая подсветка, оконный рабочий стол
+    поверх панелей и тетрис по Ctrl+T — всё на месте. Но внутри — UTF-8,
+    мышь с драгом, SFTP и автомонтирование образов дисков.</p>
+  </section>
+
+  <section>
+    <h2>Возможности</h2>
+    <div class="grid">
+      <div class="card">
+        <h3><span class="k">Enter</span> Архивы и образы — как каталоги</h3>
+        <p>zip, tar, 7z, iso открываются по Enter и ведут себя как папки.
+        dmg/iso на macOS автоматически монтируются и размонтируются.</p>
+      </div>
+      <div class="card">
+        <h3><span class="k">sftp://</span> Удалённые панели</h3>
+        <p>Панель на удалённой машине через SFTP, менеджер SSH-сессий
+        (Ctrl+S), копирование между локальной, удалённой и архивной
+        панелями в любую сторону.</p>
+      </div>
+      <div class="card">
+        <h3><span class="k">F3/F4</span> Вьювер и MicroEd</h3>
+        <p>Просмотр и редактирование в перекрывающихся окнах поверх панелей —
+        несколько файлов сразу, drag за заголовок, ресайз мышью.</p>
+      </div>
+      <div class="card">
+        <h3><span class="k">F2</span> User menu</h3>
+        <p>Свои команды в dn.mnu с плейсхолдерами (%f, %s, %d) — глобальное
+        меню и локальное на каталог, как в оригинале.</p>
+      </div>
+      <div class="card">
+        <h3><span class="k">Options</span> Всё настраивается</h3>
+        <p>Столбцы панелей, точные размеры файлов, подсветка по типам,
+        цветовые схемы, подтверждения — сохраняется между сессиями.</p>
+      </div>
+      <div class="card">
+        <h3><span class="k">Ctrl+T</span> Игра)</h3>
+        <p>Куда же без этого. Прямо в файловом менеджере, как в оригинале.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Как это сделано</h2>
+    <p class="lead">Весь продукт — код, 160+ автотестов в настоящем pty,
+    иконка (пересобранная попиксельно из оригинального DN.ICO 1995 года),
+    сборка, подпись и нотаризация — создан в диалоге с моделью
+    <b>Claude Fable</b>. Человеческий вклад — постановка задач и ревью.</p>
+    <p class="lead muted">Софт сегодня — мем. Но этот мем проходит Gatekeeper.</p>
+  </section>
+
+  <section>
+    <h2>Установка</h2>
+    <div class="dl">
+      <p><b style="color:var(--white)">macOS (Apple Silicon):</b> скачай DMG,
+      перетащи приложение в Applications. Образ подписан и нотаризован —
+      никаких предупреждений.</p>
+      <p style="margin-top:14px"><b style="color:var(--white)">Linux (Debian/Ubuntu):</b></p>
+      <code>make deb &amp;&amp; sudo dpkg -i dist/dn-datanavigator_1.1.0_*.deb</code>
+      <p style="margin-top:14px"><b style="color:var(--white)">Из исходников:</b></p>
+      <code>brew install fpc ncurses   # или apt install fpc libncursesw5-dev
+make &amp;&amp; bin/dn</code>
+    </div>
+  </section>
+
+  <footer>
+    <p>Основано на идеях и анализе кода оригинального Dos Navigator от
+    <b>RIT Labs</b>. Dos Navigator © RIT Labs — вся заслуга оригинального
+    дизайна принадлежит им.</p>
+    <p>DN - DataNavigator · Gregory Pletnev ·
+    <a href="https://t.me/My_CTO_Notes">t.me/My_CTO_Notes</a></p>
+  </footer>
+
+</div>
+
+</body>
+</html>

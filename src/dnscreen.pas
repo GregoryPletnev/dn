@@ -23,10 +23,15 @@ const
   cpMenuSel   = 11; // selected menu item / focused button: black on green
   cpInput     = 12; // dialog input line: white on blue
   cpViewer    = 13; // viewer text: white on blue
+  cpHl1       = 14; // file-highlight groups 1..4: user fg on panel bg
+  cpHl2       = 15;
+  cpHl3       = 16;
+  cpHl4       = 17;
 
   { Mouse button masks for NCURSES_MOUSE_VERSION = 2 (5 bits per button,
     mask = m shl ((btn-1)*5)). The FPC binding's BUTTON* constants use the
     v1 6-bit layout and do NOT match libncurses 6 — do not use them. }
+  mbtn1Released  = $1;
   mbtn1Pressed   = $2;
   mbtn1Clicked   = $4;
   mbtn1Double    = $8;
@@ -37,7 +42,8 @@ const
   mbtn3Triple    = $4000;
   mbtnWheelUp    = $10000;    // BUTTON4_PRESSED
   mbtnWheelDown  = $200000;   // BUTTON5_PRESSED
-  mAllMouseEvents = $0FFFFFFF;
+  mMousePosition = $10000000; // REPORT_MOUSE_POSITION (drag motion events)
+  mAllMouseEvents = $1FFFFFFF;
 
   { double / single line box drawing (UTF-8) }
   bxTL = '╔'; bxTR = '╗'; bxBL = '╚'; bxBR = '╝';
@@ -53,6 +59,12 @@ var
 
 procedure ScrInit;
 procedure ScrDone;
+{ re-init the color pairs to one of the schemes (dnoptions pal* constants);
+  ScrInit applies scheme 0, dn.pas re-applies the configured one }
+procedure ApplyPalette(Scheme: Integer);
+{ set highlight pair cpHl<idx> (idx 1..4) to fg on the current panel bg;
+  call after ApplyPalette (which resets the bg) }
+procedure SetHlPair(idx, fg: Integer);
 procedure PutStr(y, x: Integer; const s: AnsiString; pair: Integer; bold: Boolean = False);
 procedure FillRow(y, x, w: Integer; pair: Integer);
 function PadLeft(const s: AnsiString; w: Integer): AnsiString;
@@ -70,6 +82,67 @@ function Utf8PadLeft(const s: AnsiString; w: Integer): AnsiString;
 
 implementation
 
+var
+  PanelBG: LongInt = COLOR_BLUE;   // panel background of the active scheme
+
+procedure SetHlPair(idx, fg: Integer);
+begin
+  if (idx < 1) or (idx > 4) then Exit;
+  if (fg < 1) or (fg > 7) then fg := COLOR_WHITE;
+  init_pair(cpHl1 + idx - 1, fg, PanelBG);
+end;
+
+procedure ApplyPalette(Scheme: Integer);
+begin
+  if Scheme = 0 then PanelBG := COLOR_BLUE else PanelBG := COLOR_BLACK;
+  case Scheme of
+    1: begin  { dark: black background }
+      init_pair(cpFrame,     COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpFile,      COLOR_CYAN,   COLOR_BLACK);
+      init_pair(cpDir,       COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpCursor,    COLOR_BLACK,  COLOR_CYAN);
+      init_pair(cpMenuBar,   COLOR_BLACK,  COLOR_CYAN);
+      init_pair(cpFKeyNum,   COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpCmdLine,   COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpSelected,  COLOR_YELLOW, COLOR_BLACK);
+      init_pair(cpSelCursor, COLOR_YELLOW, COLOR_CYAN);
+      init_pair(cpTitleAct,  COLOR_BLACK,  COLOR_CYAN);
+      init_pair(cpMenuSel,   COLOR_BLACK,  COLOR_GREEN);
+      init_pair(cpInput,     COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpViewer,    COLOR_WHITE,  COLOR_BLACK);
+    end;
+    2: begin  { black & white }
+      init_pair(cpFrame,     COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpFile,      COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpDir,       COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpCursor,    COLOR_BLACK,  COLOR_WHITE);
+      init_pair(cpMenuBar,   COLOR_BLACK,  COLOR_WHITE);
+      init_pair(cpFKeyNum,   COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpCmdLine,   COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpSelected,  COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpSelCursor, COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpTitleAct,  COLOR_BLACK,  COLOR_WHITE);
+      init_pair(cpMenuSel,   COLOR_WHITE,  COLOR_BLACK);
+      init_pair(cpInput,     COLOR_BLACK,  COLOR_WHITE);
+      init_pair(cpViewer,    COLOR_WHITE,  COLOR_BLACK);
+    end;
+  else      { classic DN blue }
+    init_pair(cpFrame,     COLOR_WHITE,  COLOR_BLUE);
+    init_pair(cpFile,      COLOR_CYAN,   COLOR_BLUE);
+    init_pair(cpDir,       COLOR_WHITE,  COLOR_BLUE);
+    init_pair(cpCursor,    COLOR_BLACK,  COLOR_CYAN);
+    init_pair(cpMenuBar,   COLOR_BLACK,  COLOR_CYAN);
+    init_pair(cpFKeyNum,   COLOR_WHITE,  COLOR_BLACK);
+    init_pair(cpCmdLine,   COLOR_WHITE,  COLOR_BLACK);
+    init_pair(cpSelected,  COLOR_YELLOW, COLOR_BLUE);
+    init_pair(cpSelCursor, COLOR_YELLOW, COLOR_CYAN);
+    init_pair(cpTitleAct,  COLOR_BLACK,  COLOR_CYAN);
+    init_pair(cpMenuSel,   COLOR_BLACK,  COLOR_GREEN);
+    init_pair(cpInput,     COLOR_WHITE,  COLOR_BLUE);
+    init_pair(cpViewer,    COLOR_WHITE,  COLOR_BLUE);
+  end;
+end;
+
 procedure ScrInit;
 begin
   initscr;
@@ -80,29 +153,25 @@ begin
   keypad(stdscr, True);
   curs_set(0);
   start_color;
-  init_pair(cpFrame,     COLOR_WHITE,  COLOR_BLUE);
-  init_pair(cpFile,      COLOR_CYAN,   COLOR_BLUE);
-  init_pair(cpDir,       COLOR_WHITE,  COLOR_BLUE);
-  init_pair(cpCursor,    COLOR_BLACK,  COLOR_CYAN);
-  init_pair(cpMenuBar,   COLOR_BLACK,  COLOR_CYAN);
-  init_pair(cpFKeyNum,   COLOR_WHITE,  COLOR_BLACK);
-  init_pair(cpCmdLine,   COLOR_WHITE,  COLOR_BLACK);
-  init_pair(cpSelected,  COLOR_YELLOW, COLOR_BLUE);
-  init_pair(cpSelCursor, COLOR_YELLOW, COLOR_CYAN);
-  init_pair(cpTitleAct,  COLOR_BLACK,  COLOR_CYAN);
-  init_pair(cpMenuSel,   COLOR_BLACK,  COLOR_GREEN);
-  init_pair(cpInput,     COLOR_WHITE,  COLOR_BLUE);
-  init_pair(cpViewer,    COLOR_WHITE,  COLOR_BLUE);
+  ApplyPalette(0);
   mousemask(mAllMouseEvents, nil);
   { Raw press/release only: ncurses' click/double-click synthesis is
     timing-dependent and can swallow press events (a second quick click
     may arrive as a lone RELEASED). We act on presses and detect double
     clicks ourselves. }
   mouseinterval(0);
+  { Button-motion tracking (xterm 1002): terminals send drag events.
+    Must go out AFTER ncurses' own mouse-enable string (flushed by
+    refresh), or its "?1000h" would downgrade tracking to clicks-only. }
+  refresh;
+  Write(#27'[?1002h');
+  Flush(Output);
 end;
 
 procedure ScrDone;
 begin
+  Write(#27'[?1002l');
+  Flush(Output);
   endwin;
 end;
 

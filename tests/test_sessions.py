@@ -122,6 +122,61 @@ def test_delete_session(dnm, sandbox):
     dnm.key('ESC')
 
 
+def test_empty_state_hint(sandbox):
+    # no sessions file at all
+    s = make_session(sandbox)
+    try:
+        s.wait_text('a.txt')
+        s.send('\x13')                       # Ctrl-S
+        s.wait_text('SSH Sessions')
+        assert s.row_of('No saved sessions') is not None
+        assert s.row_of('Add') is not None    # footer button
+        s.key('ESC')
+        s.wait_gone('SSH Sessions')
+    finally:
+        s.close()
+
+
+def test_f1_help_in_manager(dnm):
+    open_mgr(dnm)
+    dnm.key('F1')
+    dnm.wait_text('ssh-copy-id')              # help text body
+    dnm.key('ENTER')                          # close help
+    dnm.wait_gone('ssh-copy-id')
+    dnm.wait_text('SSH Sessions')             # back to the manager
+    dnm.key('ESC')
+
+
+def test_footer_button_add_clickable(dnm, sandbox):
+    open_mgr(dnm)
+    dnm.click_on('Add')                       # footer button, not a hotkey
+    dnm.wait_text('Alias (Host):')
+    dnm.send('clickadd')
+    dnm.key('ENTER')
+    dnm.wait_text('HostName:')
+    for _ in range(6):
+        dnm.wait_text(':')
+        dnm.key('ENTER')
+    dnm.wait_text('clickadd')
+    assert 'Host clickadd' in (sandbox / 'cfg' / 'sessions').read_text()
+    dnm.key('ESC')
+
+
+def test_footer_button_connect_clickable(dnm):
+    open_mgr(dnm)
+    dnm.click_on('home')                      # select the session row
+    dnm.click_on('Connect')                   # footer button
+    dnm.wait_gone('SSH Sessions')
+    dnm.wait_text('server_file.txt')
+
+
+def test_footer_esc_button_closes(dnm):
+    open_mgr(dnm)
+    dnm.click_on('Esc')                       # footer close button
+    dnm.wait_gone('SSH Sessions')
+    assert dnm.alive()
+
+
 def test_sessions_file_is_valid_ssh_config(dnm, sandbox):
     """ssh -G must accept our generated file (add a session, then parse)."""
     open_mgr(dnm)

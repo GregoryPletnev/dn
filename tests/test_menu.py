@@ -44,14 +44,15 @@ def test_fkey_bar_pulldn_click_opens_menu(dn):
     dn.wait_gone('Re-read')
 
 
-def test_disabled_item_not_executable(dn):
-    dn.click_on('Options')              # Options is still a placeholder
-    dn.wait_text('(not implemented)')
-    dn.key('ENTER')                     # nothing selectable — must not close/crash
+def test_separator_row_not_executable(dn):
+    dn.click_on('Options')
+    dn.wait_text('Panel setup')
+    r = dn.row_of('Confirmations')
+    dn.mouse(50, r + 1)                 # separator row below Confirmations
     dn.pump(0.2)
-    assert dn.row_of('(not implemented)') is not None
+    assert dn.row_of('Panel setup') is not None, 'menu stays open'
     dn.key('ESC')
-    dn.wait_gone('(not implemented)')
+    dn.wait_gone('Panel setup')
     assert dn.alive()
 
 

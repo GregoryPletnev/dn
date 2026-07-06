@@ -30,6 +30,15 @@ const
   cmSftpConnect= 19;
   cmUUEncode   = 20;
   cmUUDecode   = 21;
+  cmPanelSetup = 22;
+  cmConfirmations = 23;
+  cmColors     = 24;
+  cmHighlight  = 25;
+  cmUserMenu   = 26;
+  cmMenuEditGlobal = 27;
+  cmMenuEditLocal  = 28;
+  cmColumnsLeft  = 29;
+  cmColumnsRight = 30;
 
 procedure DrawBar(sel: Integer);
 { Modal menu loop; startSel = menu index to open (0-based), returns cm*. }
@@ -83,6 +92,7 @@ begin
   AddMenu('Left');
   AddItem('Sort by...', 'Alt-S', cmSortLeft);
   AddItem('Filter...', '', cmFilterLeft);
+  AddItem('Columns...', '', cmColumnsLeft);
   AddItem('Re-read', 'Ctrl-R', cmRereadLeft);
   AddMenu('Files');
   AddItem('View', 'F3', cmView);
@@ -97,16 +107,25 @@ begin
   AddItem('SSH sessions...', 'Ctrl-S', cmSessions);
   AddItem('Connect sftp...', '', cmSftpConnect);
   AddMenu('Commands');
+  AddItem('User menu', 'F2', cmUserMenu);
   AddItem('Re-read panels', 'Ctrl-R', cmRereadAll);
   AddItem('UU-encode file', 'Ctrl-F7', cmUUEncode);
   AddItem('UU-decode file', 'Ctrl-F8', cmUUDecode);
   AddMenu('Tools');
   AddItem('Tetris', 'Ctrl-T', cmTetris);
   AddMenu('Options');
-  AddItem('(not implemented)', '', cmNone);
+  AddItem('Panel setup...', '', cmPanelSetup);
+  AddItem('Confirmations...', '', cmConfirmations);
+  AddItem('', '', cmNone);            // separator
+  AddItem('Global menu definition...', '', cmMenuEditGlobal);
+  AddItem('Local menu definition...', '', cmMenuEditLocal);
+  AddItem('', '', cmNone);            // separator
+  AddItem('Colors...', '', cmColors);
+  AddItem('Highlight groups...', '', cmHighlight);
   AddMenu('Right');
   AddItem('Sort by...', 'Alt-S', cmSortRight);
   AddItem('Filter...', '', cmFilterRight);
+  AddItem('Columns...', '', cmColumnsRight);
   AddItem('Re-read', 'Ctrl-R', cmRereadRight);
 
   x := 2;

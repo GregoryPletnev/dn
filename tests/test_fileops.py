@@ -105,17 +105,17 @@ def test_f3_viewer(dn):
 
 def test_f1_help(dn):
     dn.key('F1')
-    dn.wait_text('DOS NAVIGATOR')
+    dn.wait_text('DN - DataNavigator')
     dn.key('END')                       # scroll to the bottom of the help
-    dn.wait_text('zoom icons')
+    dn.wait_text('Gregory Pletnev')
     dn.send('q')
-    dn.wait_gone('DOS NAVIGATOR')
+    dn.wait_gone('DN - DataNavigator')
     assert dn.alive()
 
 
-def test_f2_placeholder_msgbox(dn):
+def test_f2_no_menu_offers_template(dn):
     dn.key('F2')
-    dn.wait_text('not implemented yet')
-    dn.key('ENTER')
-    dn.wait_gone('not implemented yet')
+    dn.wait_text('No user menu entries')
+    dn.send('n')
+    dn.wait_gone('No user menu entries')
     assert dn.alive()

@@ -139,3 +139,23 @@ def test_quit_asks_about_modified_editor(dn, sandbox):
     dn.send('d')                        # Discard: quit proceeds
     assert dn.wait_exit() == 0
     assert (sandbox / 'left' / 'a.txt').read_text() == 'aaa\n'
+
+
+def test_viewer_clips_binary_lines(dn, sandbox):
+    # tabs and control bytes used to render wider than counted (^X pairs,
+    # tab stops) and spill over the right frame border
+    with open(sandbox / 'left' / 'bin.dat', 'wb') as f:
+        f.write(b'plain\n')
+        f.write(b'A\tB\tC\tD\tE\tF\tG\tH\tI\tJ\tK\tL\tM\n')
+        f.write(bytes(range(1, 32)) * 8 + b'\n')
+    dn.key('CTRL_R')
+    dn.wait_text('bin.dat')
+    dn.click_on('bin.dat', panel='left')
+    dn.key('F3')
+    dn.wait_text('plain')
+    r = dn.row_of('plain')
+    line = dn.display()[r]
+    b = line.find('║', line.find('plain'))
+    assert b > 0, dn.dump()
+    assert dn.cell(r + 1, b).data == '║', 'tab line spilled: ' + dn.dump()
+    assert dn.cell(r + 2, b).data == '║', 'control line spilled: ' + dn.dump()

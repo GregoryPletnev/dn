@@ -6,7 +6,7 @@ program unittests;
 
 uses
   SysUtils, Classes, dnscreen, dnpanel, dnfileops, dnuu, dnvfs, dnsftp,
-  dnsession;
+  dnsession, dnusermenu;
 
 var
   Failures: Integer = 0;
@@ -222,6 +222,48 @@ begin
   if saved <> '' then { leave the generated file for inspection } ;
 end;
 
+procedure TestUserMenu;
+var
+  L: TStringList;
+  M: TUserMenu;
+  fn: AnsiString;
+begin
+  fn := GetTempDir + 'dn-unittest.mnu';
+  L := TStringList.Create;
+  try
+    L.Add('# comment');
+    L.Add('First entry');
+    L.Add(#9'echo one');
+    L.Add(#9'echo two');
+    L.Add('; another comment');
+    L.Add('Orphan title (no command)');
+    L.Add('Second entry');
+    L.Add('    echo three');
+    L.SaveToFile(fn);
+  finally
+    L.Free;
+  end;
+  Check(LoadUserMenu(fn, M), 'usermenu loads');
+  Check(Length(M) = 2, 'usermenu entry count (orphans dropped)');
+  if Length(M) = 2 then
+  begin
+    CheckEq(M[0].Title, 'First entry', 'usermenu title');
+    CheckEq(M[0].Command, 'echo one'#10'echo two', 'usermenu multiline cmd');
+    CheckEq(M[1].Command, 'echo three', 'usermenu space-indented cmd');
+  end;
+  DeleteFile(fn);
+  Check(not LoadUserMenu(fn, M), 'usermenu missing file');
+
+  CheckEq(ExpandUserCmd('file %f', 'a b.txt', '', '', '', ''),
+          'file ''a b.txt''', 'expand %f quotes');
+  CheckEq(ExpandUserCmd('cp %p %D', '', '/x/a', '', '/y', ''),
+          'cp ''/x/a'' ''/y''', 'expand %p %D');
+  CheckEq(ExpandUserCmd('du %s', '', '', '', '', '''a'' ''b'''),
+          'du ''a'' ''b''', 'expand %s list');
+  CheckEq(ExpandUserCmd('100%% done', '', '', '', '', ''),
+          '100% done', 'expand %%');
+end;
+
 begin
   TestUtf8;
   TestMatchMask;
@@ -231,6 +273,7 @@ begin
   TestParseLs;
   TestSftpUrl;
   TestSessionsRoundTrip;
+  TestUserMenu;
   if Failures = 0 then
     WriteLn(Checks, ' unit checks passed')
   else

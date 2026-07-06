@@ -129,10 +129,13 @@ def test_ctrl_o_user_screen(dn):
     dn.send('echo marker_on_user_screen')
     dn.key('ENTER')
     dn.pump(0.3)
-    dn.send('\x0f')                         # Ctrl-O
-    dn.wait_text('Press any key')
-    dn.send(' ')
-    dn.wait_gone('Press any key')
+    dn.key('CTRL_O')
+    dn.wait_text('Ctrl-O to return')
+    dn.send('x')                            # MC-style: other keys are ignored
+    dn.pump(0.2)
+    assert dn.row_of('Ctrl-O to return') is not None
+    dn.key('CTRL_O')                        # toggles back to the panels
+    dn.wait_gone('Ctrl-O to return')
     assert dn.alive()
 
 
