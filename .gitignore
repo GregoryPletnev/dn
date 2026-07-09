@@ -6,6 +6,7 @@ dist/
 tests/.venv/
 __pycache__/
 .pytest_cache/
+.DS_Store
 
 # Внутренняя инструкция по публикации — не в публичное зеркало
 PUBLISHING.md

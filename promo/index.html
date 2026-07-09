@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DN - DataNavigator — Dos Navigator для современного терминала</title>
-<meta name="description" content="DN - DataNavigator: воссоздание классического Dos Navigator на Free Pascal + ncurses для macOS. Панели, архивы как каталоги, SFTP, MicroEd и тетрис.">
+<title>DN - DataNavigator - Dos Navigator for the modern terminal</title>
+<meta name="description" content="DN - DataNavigator: a recreation of the classic Dos Navigator in Free Pascal + ncurses for macOS. Dual panels, archives as folders, SFTP, MicroEd, and Tetris.">
 <style>
   :root {
     --bg: #0a0e1a;
@@ -145,18 +145,18 @@
 <div class="wrap">
 
   <header>
-    <img src="dn-icon.png" alt="Иконка DN - DataNavigator: пиксельный компас">
+    <img src="dn-icon.png" alt="DN - DataNavigator icon: pixel compass">
     <h1><span class="dn">DN</span> - DataNavigator</h1>
-    <p class="tagline">Тот самый Dos Navigator — заново, для современного терминала.<br>
+    <p class="tagline">The classic Dos Navigator, rebuilt for the modern terminal.<br>
     Free Pascal + ncurses · macOS (Apple Silicon)</p>
 
     <div class="cta">
-      <a class="btn" href="DN-DataNavigator-1.1.0-arm64.dmg">Скачать DMG (arm64)</a>
-      <a class="btn ghost" href="https://t.me/My_CTO_Notes">TG-канал автора</a>
+      <a class="btn" href="DN-DataNavigator-1.1.0-arm64.dmg">Download DMG (arm64)</a>
+      <a class="btn ghost" href="https://t.me/My_CTO_Notes">Author's Telegram</a>
     </div>
-    <p class="cta-note">Перетащил в Applications — работает. Без Homebrew и зависимостей.</p>
+    <p class="cta-note">Drag it to Applications and run it. No Homebrew or extra dependencies required.</p>
 
-    <div class="screen" role="img" aria-label="Скриншот: два синих файловых панели в стиле Dos Navigator">
+    <div class="screen" role="img" aria-label="Screenshot: two blue file panels in the Dos Navigator style">
 <pre>
 <span class="t">  Left    Files    Disk    Commands    Tools    Options    Right      13:59:13 </span>
 ╔═══════════ <span class="t"> /Users/count </span> ═══════════╗╔═══════════ /Users/count/ ═══════════╗
@@ -176,77 +176,77 @@
   </header>
 
   <section>
-    <h2>Что это</h2>
-    <p class="lead">Воссоздание классического <b>Dos Navigator</b> от RIT Labs —
-    двухпанельного файлового менеджера из 90-х — написанное с нуля на
-    Free Pascal и ncurses. Оригинальные исходники на Turbo Pascal служили
-    референсом поведения и внешнего вида; код новый, под Unix-терминалы.</p>
-    <p class="lead muted">Синие панели, жёлтая подсветка, оконный рабочий стол
-    поверх панелей и тетрис по Ctrl+T — всё на месте. Но внутри — UTF-8,
-    мышь с драгом, SFTP и автомонтирование образов дисков.</p>
+    <h2>What It Is</h2>
+    <p class="lead">A recreation of the classic <b>Dos Navigator</b> by RIT Labs,
+    the dual-panel file manager from the 90s, written from scratch in
+    Free Pascal and ncurses. The original Turbo Pascal sources were used
+    as a behavior and visual reference; this is new code for Unix terminals.</p>
+    <p class="lead muted">Blue panels, yellow highlights, an overlapping-window
+    desktop above the panels, and Ctrl+T Tetris are all here. Inside, it
+    is UTF-8 aware, mouse-driven, SFTP-capable, and can automount disk images.</p>
   </section>
 
   <section>
-    <h2>Возможности</h2>
+    <h2>Features</h2>
     <div class="grid">
       <div class="card">
-        <h3><span class="k">Enter</span> Архивы и образы — как каталоги</h3>
-        <p>zip, tar, 7z, iso открываются по Enter и ведут себя как папки.
-        dmg/iso на macOS автоматически монтируются и размонтируются.</p>
+        <h3><span class="k">Enter</span> Archives and images as folders</h3>
+        <p>zip, tar, 7z, and iso files open with Enter and behave like folders.
+        dmg/iso images on macOS are mounted and unmounted automatically.</p>
       </div>
       <div class="card">
-        <h3><span class="k">sftp://</span> Удалённые панели</h3>
-        <p>Панель на удалённой машине через SFTP, менеджер SSH-сессий
-        (Ctrl+S), копирование между локальной, удалённой и архивной
-        панелями в любую сторону.</p>
+        <h3><span class="k">sftp://</span> Remote panels</h3>
+        <p>Browse a remote machine through SFTP, manage SSH sessions with
+        Ctrl+S, and copy files between local, remote, and archive panels in
+        either direction.</p>
       </div>
       <div class="card">
-        <h3><span class="k">F3/F4</span> Вьювер и MicroEd</h3>
-        <p>Просмотр и редактирование в перекрывающихся окнах поверх панелей —
-        несколько файлов сразу, drag за заголовок, ресайз мышью.</p>
+        <h3><span class="k">F3/F4</span> Viewer and MicroEd</h3>
+        <p>View and edit files in overlapping windows above the panels, with
+        multiple files open at once, title-bar dragging, and mouse resizing.</p>
       </div>
       <div class="card">
         <h3><span class="k">F2</span> User menu</h3>
-        <p>Свои команды в dn.mnu с плейсхолдерами (%f, %s, %d) — глобальное
-        меню и локальное на каталог, как в оригинале.</p>
+        <p>Define your own commands in dn.mnu with placeholders (%f, %s, %d),
+        using both a global menu and per-directory local menus, like the original.</p>
       </div>
       <div class="card">
-        <h3><span class="k">Options</span> Всё настраивается</h3>
-        <p>Столбцы панелей, точные размеры файлов, подсветка по типам,
-        цветовые схемы, подтверждения — сохраняется между сессиями.</p>
+        <h3><span class="k">Options</span> Configurable by design</h3>
+        <p>Panel columns, exact file sizes, type highlighting, color schemes,
+        and confirmations are all configurable and saved between sessions.</p>
       </div>
       <div class="card">
-        <h3><span class="k">Ctrl+T</span> Игра)</h3>
-        <p>Куда же без этого. Прямо в файловом менеджере, как в оригинале.</p>
+        <h3><span class="k">Ctrl+T</span> Tetris</h3>
+        <p>Because of course. Built right into the file manager, like in the original.</p>
       </div>
     </div>
   </section>
 
   <section>
-    <h2>Как это сделано</h2>
-    <p class="lead">Весь продукт — код, 160+ автотестов в настоящем pty,
-    иконка (пересобранная попиксельно из оригинального DN.ICO 1995 года),
-    сборка, подпись и нотаризация — создан в диалоге с моделью
-    <b>Claude Fable</b>. Человеческий вклад — постановка задач и ревью.</p>
-    <p class="lead muted">Софт сегодня — мем. Но этот мем проходит Gatekeeper.</p>
+    <h2>How It Was Made</h2>
+    <p class="lead">The whole product - code, 160+ automated tests running in
+    a real pty, the icon rebuilt pixel by pixel from the original 1995 DN.ICO,
+    packaging, signing, and notarization - was created in dialogue with
+    <b>Claude Fable</b>. The human part was task design and review.</p>
+    <p class="lead muted">Software is a meme these days. This one passes Gatekeeper.</p>
   </section>
 
   <section>
-    <h2>Установка</h2>
+    <h2>Install</h2>
     <div class="dl">
-      <p><b style="color:var(--white)">macOS (Apple Silicon):</b> скачай DMG,
-      перетащи приложение в Applications. Образ подписан и нотаризован —
-      никаких предупреждений.</p>
-      <p style="margin-top:14px"><b style="color:var(--white)">Из исходников:</b></p>
+      <p><b style="color:var(--white)">macOS (Apple Silicon):</b> download the
+      DMG and drag the app to Applications. The image is signed and notarized,
+      so Gatekeeper should not show warnings.</p>
+      <p style="margin-top:14px"><b style="color:var(--white)">From source:</b></p>
       <code>brew install fpc ncurses
 make &amp;&amp; bin/dn</code>
     </div>
   </section>
 
   <footer>
-    <p>Основано на идеях и анализе кода оригинального Dos Navigator от
-    <b>RIT Labs</b>. Dos Navigator © RIT Labs — вся заслуга оригинального
-    дизайна принадлежит им.</p>
+    <p>Based on the ideas and code analysis of the original Dos Navigator by
+    <b>RIT Labs</b>. Dos Navigator © RIT Labs; all credit for the original
+    design belongs to them.</p>
     <p>DN - DataNavigator · Gregory Pletnev ·
     <a href="https://t.me/My_CTO_Notes">t.me/My_CTO_Notes</a></p>
   </footer>
