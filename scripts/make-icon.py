@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Regenerate assets/dn.icns from the original DN.ICO pixel art.
+"""Regenerate the DN app icon from new project-local pixel art.
 
-Takes the compass and the letter 'D' straight from original/DN.ICO,
-adds a matching pixel 'N', and puts everything on a macOS-style
-squircle gradient. Requires ImageMagick (magick) and iconutil.
+The mark is a new geometric DN monogram with a dual-panel/compass motif,
+drawn directly in this script. Requires ImageMagick (magick) and iconutil.
 
 Usage: python3 scripts/make-icon.py   (from the repo root)
 """
@@ -12,7 +11,6 @@ import subprocess
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ICO = os.path.join(ROOT, 'original', 'DN.ICO')
 ASSETS = os.path.join(ROOT, 'assets')
 
 
@@ -22,24 +20,6 @@ def run(*cmd):
 
 def main():
     tmp = tempfile.mkdtemp()
-    png = os.path.join(tmp, 'ico.png')
-    run('magick', ICO, png)
-
-    # --- read the 32x32 original into a character grid ---------------------
-    out = subprocess.run(['magick', png, 'txt:'],
-                         capture_output=True, text=True, check=True).stdout
-    grid = [['.'] * 32 for _ in range(32)]
-    for line in out.splitlines()[1:]:
-        pos, rest = line.split(':', 1)
-        x, y = map(int, pos.split(','))
-        c = rest.split('#')[1][:6]
-        grid[y][x] = {'000000': '#', '00FFFF': 'C', '0000FF': 'B',
-                      'FF0000': 'R'}.get(c, '.')
-
-    compass = [''.join(grid[y][8:30]) for y in range(11, 30)]   # 22x19
-    D = [''.join(grid[y][3:8]) for y in range(2, 10)]           # 5x8
-    N = ['#...#', '##..#', '##..#', '#.#.#',                    # matching style
-         '#.#.#', '#..##', '#..##', '#...#']
 
     # --- compose the 30x30 working grid ------------------------------------
     W = H = 30
@@ -51,9 +31,69 @@ def main():
                 if ch != '.':
                     art[y0 + dy][x0 + dx] = remap.get(ch, ch) if remap else ch
 
-    blit(D, 9, 1, remap={'#': 'W'})     # 'DN' in white, centered
-    blit(N, 16, 1, remap={'#': 'W'})
-    blit(compass, 4, 10)
+    D = [
+        '#####.',
+        '##..##',
+        '##...#',
+        '##...#',
+        '##...#',
+        '##...#',
+        '##..##',
+        '#####.',
+    ]
+    N = [
+        '##...##',
+        '###..##',
+        '####.##',
+        '##.####',
+        '##..###',
+        '##...##',
+        '##...##',
+        '##...##',
+    ]
+    left_panel = [
+        '##########',
+        '#........#',
+        '#.######.#',
+        '#........#',
+        '#.####...#',
+        '#........#',
+        '##########',
+    ]
+    right_panel = [
+        '##########',
+        '#........#',
+        '#...####.#',
+        '#........#',
+        '#.######.#',
+        '#........#',
+        '##########',
+    ]
+    needle_north = [
+        '..R..',
+        '.RRR.',
+        'RRRRR',
+        '..R..',
+        '..R..',
+    ]
+    needle_south = [
+        '..B..',
+        '..B..',
+        'BBBBB',
+        '.BBB.',
+        '..B..',
+    ]
+
+    blit(D, 5, 3, remap={'#': 'W'})
+    blit(N, 16, 3, remap={'#': 'W'})
+    blit(left_panel, 3, 16, remap={'#': 'C'})
+    blit(right_panel, 17, 16, remap={'#': 'C'})
+    blit(needle_north, 12, 14)
+    blit(needle_south, 13, 20)
+    art[18][14] = 'W'
+    art[18][15] = 'W'
+    art[19][14] = 'W'
+    art[19][15] = 'W'
 
     colors = {'.': (0, 0, 0, 0),
               'W': (255, 255, 255, 255),
@@ -81,16 +121,17 @@ def main():
     os.makedirs(ASSETS, exist_ok=True)
     run('magick', '-size', '1024x1024', 'xc:none',
         squircle, '-gravity', 'center', '-composite',
-        art_big, '-gravity', 'center', '-composite', master)
+        art_big, '-gravity', 'center', '-composite',
+        '-depth', '8', 'PNG32:' + master)
 
     # --- iconset -> icns -----------------------------------------------------
     iconset = os.path.join(tmp, 'dn.iconset')
     os.makedirs(iconset)
     for s in (16, 32, 128, 256, 512):
-        run('sips', '-z', str(s), str(s), master,
-            '--out', os.path.join(iconset, 'icon_%dx%d.png' % (s, s)))
-        run('sips', '-z', str(s * 2), str(s * 2), master,
-            '--out', os.path.join(iconset, 'icon_%dx%d@2x.png' % (s, s)))
+        run('magick', master, '-resize', '%dx%d' % (s, s), '-depth', '8',
+            'PNG32:' + os.path.join(iconset, 'icon_%dx%d.png' % (s, s)))
+        run('magick', master, '-resize', '%dx%d' % (s * 2, s * 2), '-depth', '8',
+            'PNG32:' + os.path.join(iconset, 'icon_%dx%d@2x.png' % (s, s)))
     run('iconutil', '-c', 'icns', iconset,
         '-o', os.path.join(ASSETS, 'dn.icns'))
     print('wrote', os.path.join(ASSETS, 'dn.icns'))

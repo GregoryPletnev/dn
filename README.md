@@ -56,10 +56,9 @@ an `/Applications` symlink. By default the signature is ad-hoc, so users
 need right-click > Open on first launch; for Gatekeeper-clean distribution
 pass a Developer ID via `CODESIGN_IDENTITY=...` and notarize the DMG.
 
-The app icon (`assets/dn.icns`) is derived from the original `DN.ICO`
-pixel art — the compass and the letters restyled to the macOS squircle
-format; regenerate it with `python3 scripts/make-icon.py` (needs
-ImageMagick).
+The app icon (`assets/dn.icns`) is a new project-local DN mark inspired by
+the classic dual-panel visual language; regenerate it with
+`python3 scripts/make-icon.py` (needs ImageMagick).
 
 ## Distribution (Debian/Ubuntu)
 
