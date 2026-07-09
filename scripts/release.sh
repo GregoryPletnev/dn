@@ -57,7 +57,10 @@ TAG="v$VERSION"
 say "Preflight"
 command -v glab >/dev/null || die "glab not found (brew install glab)"
 command -v gh   >/dev/null || die "gh not found (brew install gh)"
-glab auth status >/dev/null 2>&1 || die "glab not authenticated (glab auth login)"
+glab auth status --hostname "$GITLAB_HOST" >/dev/null 2>&1 \
+    || die "glab not authenticated for $GITLAB_HOST (glab auth login --hostname $GITLAB_HOST)"
+glab repo view "$GITLAB_REPO" >/dev/null 2>&1 \
+    || die "GitLab repo '$GITLAB_REPO' unreachable via glab API — check token scope and project membership"
 gh   auth status >/dev/null 2>&1 || die "gh not authenticated (gh auth login)"
 gh repo view "$GITHUB_REPO" >/dev/null 2>&1 \
     || die "GitHub repo '$GITHUB_REPO' unreachable — create it / check gh auth (see PUBLISHING.md)"
