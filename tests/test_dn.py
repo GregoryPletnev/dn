@@ -15,6 +15,16 @@ def test_startup_layout(dn, sandbox):
     assert '..' in dn.cursor_bar_text()
 
 
+def test_startup_forces_utf8_locale_for_box_drawing(sandbox):
+    s = make_session(sandbox, env={'LC_ALL': 'C', 'LC_CTYPE': 'C', 'LANG': 'C'})
+    try:
+        s.wait_text('a.txt')
+        s.wait_for(lambda x: x.cell(1, 0).data == '╔' and x.cell(1, 39).data == '╗',
+                   desc='box drawing rendered as UTF-8')
+    finally:
+        s.close()
+
+
 def test_enter_and_leave_directory(dn, sandbox):
     # cursor: .. alpha beta a.txt b.txt
     dn.key('DOWN')                      # alpha

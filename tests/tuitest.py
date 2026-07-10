@@ -125,11 +125,12 @@ class TuiSession:
         self.master, slave = pty.openpty()
         fcntl.ioctl(self.master, termios.TIOCSWINSZ,
                     struct.pack('HHHH', rows, cols, 0, 0))
-        env = dict(os.environ, TERM='xterm-256color', LC_ALL='en_US.UTF-8',
-                   **(env or {}))
+        child_env = os.environ.copy()
+        child_env.update({'TERM': 'xterm-256color', 'LC_ALL': 'en_US.UTF-8'})
+        child_env.update(env or {})
         self.proc = subprocess.Popen(
             argv, stdin=slave, stdout=slave, stderr=slave,
-            env=env, cwd=cwd, close_fds=True, start_new_session=True)
+            env=child_env, cwd=cwd, close_fds=True, start_new_session=True)
         os.close(slave)
         # A real terminal never stops reading its pty. If we only read
         # inside pump(), the buffer can fill up and the app deadlocks in

@@ -6,7 +6,7 @@ unit dnscreen;
 interface
 
 uses
-  ncurses;
+  SysUtils, ncurses;
 
 const
   { color pair ids }
@@ -85,6 +85,51 @@ implementation
 var
   PanelBG: LongInt = COLOR_BLUE;   // panel background of the active scheme
 
+function c_setenv(name, value: PChar; overwrite: LongInt): LongInt;
+  cdecl; external 'c' name 'setenv';
+function c_setlocale(category: LongInt; locale: PChar): PChar;
+  cdecl; external 'c' name 'setlocale';
+
+const
+  { LC_CTYPE is 0 on glibc and Darwin; ncurses only needs character type
+    classification to be UTF-8 before initscr. }
+  LC_CTYPE_C = 0;
+
+function IsUtf8Locale(const s: AnsiString): Boolean;
+var
+  u: AnsiString;
+begin
+  u := UpperCase(s);
+  Result := (Pos('UTF-8', u) > 0) or (Pos('UTF8', u) > 0);
+end;
+
+procedure EnsureUtf8Locale;
+var
+  loc: AnsiString;
+begin
+  loc := GetEnvironmentVariable('LC_ALL');
+  if loc = '' then loc := GetEnvironmentVariable('LC_CTYPE');
+  if loc = '' then loc := GetEnvironmentVariable('LANG');
+  if IsUtf8Locale(loc) then
+  begin
+    c_setlocale(LC_CTYPE_C, '');
+    Exit;
+  end;
+
+  { Debian ships C.UTF-8 by default. macOS does not always have it, so keep
+    en_US.UTF-8 as a fallback for direct local runs. LC_ALL has priority over
+    LC_CTYPE, so set both before initscr; otherwise ncurses renders box-drawing
+    bytes as ~U/~P. }
+  c_setenv('LC_ALL', 'C.UTF-8', 1);
+  c_setenv('LC_CTYPE', 'C.UTF-8', 1);
+  if c_setlocale(LC_CTYPE_C, '') = nil then
+  begin
+    c_setenv('LC_ALL', 'en_US.UTF-8', 1);
+    c_setenv('LC_CTYPE', 'en_US.UTF-8', 1);
+    c_setlocale(LC_CTYPE_C, '');
+  end;
+end;
+
 procedure SetHlPair(idx, fg: Integer);
 begin
   if (idx < 1) or (idx > 4) then Exit;
@@ -145,6 +190,7 @@ end;
 
 procedure ScrInit;
 begin
+  EnsureUtf8Locale;
   initscr;
   { raw, not cbreak: keeps ^Y (macOS DSUSP), ^S/^Q, ^C as ordinary input
     instead of terminal control — an editor needs them as keystrokes }
