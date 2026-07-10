@@ -10,6 +10,17 @@ variables:
   DN_CONFIG_DIR: "$CI_PROJECT_DIR/.ci-dn-config"
 
 before_script:
+  - |
+    if ! command -v fpc >/dev/null || ! command -v dpkg-deb >/dev/null || ! python3 -m venv --help >/dev/null 2>&1; then
+      if command -v sudo >/dev/null && sudo -n true; then
+        sudo apt-get update
+        sudo apt-get install -y fpc make libncursesw5-dev dpkg-dev python3 python3-venv libarchive-tools openssh-client
+      else
+        echo "Missing CI dependencies and passwordless sudo is unavailable." >&2
+        echo "Install on the deb-dev runner: fpc make libncursesw5-dev dpkg-dev python3 python3-venv libarchive-tools openssh-client" >&2
+        exit 1
+      fi
+    fi
   - fpc -iV
   - make --version
   - python3 --version
