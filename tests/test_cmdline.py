@@ -130,12 +130,11 @@ def test_ctrl_o_user_screen(dn):
     dn.key('ENTER')
     dn.pump(0.3)
     dn.key('CTRL_O')
-    dn.wait_text('Ctrl-O to return')
-    dn.send('x')                            # MC-style: other keys are ignored
-    dn.pump(0.2)
-    assert dn.row_of('Ctrl-O to return') is not None
+    dn.wait_text('Ctrl-O returns to DN')
+    dn.send('x')                            # typing lands on the prompt line
+    dn.wait_text('> x')
     dn.key('CTRL_O')                        # toggles back to the panels
-    dn.wait_gone('Ctrl-O to return')
+    dn.wait_gone('Ctrl-O returns to DN')
     assert dn.alive()
 
 

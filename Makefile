@@ -14,7 +14,7 @@ endif
 
 all: $(BIN)
 
-$(BIN): $(SRC) src/dnscreen.pas src/dnpanel.pas src/dnmenu.pas src/dndialog.pas src/dnfileops.pas src/dntetris.pas src/dnwin.pas src/dnview.pas src/dnedit.pas src/dnconfig.pas src/dnoptions.pas src/dnvfs.pas src/dnarcvfs.pas src/dnmount.pas src/dnsftp.pas src/dnsession.pas src/dnsessui.pas src/dnuu.pas src/dnusermenu.pas src/dnhighlite.pas src/dnsaver.pas
+$(BIN): $(SRC) src/dnscreen.pas src/dnpanel.pas src/dnmenu.pas src/dndialog.pas src/dnfileops.pas src/dntetris.pas src/dnwin.pas src/dnview.pas src/dnedit.pas src/dnconfig.pas src/dnoptions.pas src/dnvfs.pas src/dnarcvfs.pas src/dnmount.pas src/dnsftp.pas src/dnsession.pas src/dnsessui.pas src/dnuu.pas src/dnusermenu.pas src/dnhighlite.pas src/dnsaver.pas src/dnconsole.pas
 	@mkdir -p bin $(UNITDIR)
 	$(FPC) $(FPCFLAGS) $(SRC)
 

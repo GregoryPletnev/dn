@@ -9,7 +9,7 @@ uses
   SysUtils, Classes, ncurses,
   dnscreen, dnpanel, dnmenu, dndialog, dnfileops, dntetris,
   dnwin, dnview, dnedit, dnconfig, dnoptions, dnvfs, dnarcvfs, dnmount,
-  dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver;
+  dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver, dnconsole;
 
 {$ifdef darwin}
 function setenv(name, value: PChar; overwrite: LongInt): LongInt;
@@ -431,26 +431,171 @@ procedure ShowUserScreen;
 var
   saved: TermIOS;
   b: Char;
-{$endif}
+  line, dir, old, arg: AnsiString;
+  histAt: Integer;
+
+  procedure Prompt;
+  begin
+    Write(dir, '> ', line);
+    Flush(Output);
+  end;
+
+  { erase the typed line from the screen (one column per codepoint) }
+  procedure EraseInput;
+  var
+    n: Integer;
+  begin
+    for n := 1 to Utf8Len(line) do
+      Write(#8' '#8);
+    line := '';
+  end;
+
+  { after ESC: is a terminal sequence following? swallow it if so }
+  function SwallowEscSeq: Boolean;
+  var
+    t: TermIOS;
+    c: Char;
+    got: Boolean;
+  begin
+    TCGetAttr(0, t);
+    t.c_cc[VMIN] := 0;
+    t.c_cc[VTIME] := 1;             // 100 ms: sequences arrive at once
+    TCSetAttr(0, TCSANOW, t);
+    Result := False;
+    c := #0;
+    got := fpRead(0, c, 1) = 1;
+    if got and (c in ['[', 'O']) then
+    begin
+      Result := True;
+      repeat
+        c := #0;
+        if fpRead(0, c, 1) <> 1 then Break;
+      until not (c in ['0'..'9', ';']);
+      { arrows recall the command history }
+      if (c = 'A') and (CmdHist.Count > 0) and (histAt > 0) then
+      begin
+        Dec(histAt);
+        EraseInput;
+        line := CmdHist[histAt];
+        Write(line);
+      end
+      else if c = 'B' then
+      begin
+        EraseInput;
+        if histAt < CmdHist.Count - 1 then
+        begin
+          Inc(histAt);
+          line := CmdHist[histAt];
+        end
+        else
+          histAt := CmdHist.Count;
+        Write(line);
+      end;
+      Flush(Output);
+    end;
+    t.c_cc[VMIN] := 1;
+    t.c_cc[VTIME] := 0;
+    TCSetAttr(0, TCSANOW, t);
+  end;
+
+  procedure RunLine;
+  begin
+    WriteLn;
+    line := Trim(line);
+    if line = '' then
+    begin
+      Prompt;
+      Exit;
+    end;
+    if (CmdHist.Count = 0) or (CmdHist[CmdHist.Count - 1] <> line) then
+    begin
+      CmdHist.Add(line);
+      HistorySave(CmdHist);
+    end;
+    histAt := CmdHist.Count;
+    if (line = 'cd') or (Copy(line, 1, 3) = 'cd ') then
+    begin
+      arg := Trim(Copy(line, 3, MaxInt));
+      if arg = '' then arg := GetUserDir;
+      if arg[1] <> '/' then arg := dir + '/' + arg;
+      arg := ExpandFileName(arg);
+      if DirectoryExists(arg) then
+        dir := arg
+      else
+        WriteLn('cd: no such directory: ', arg);
+    end
+    else
+    begin
+      { the child gets the original cooked terminal }
+      TCSetAttr(0, TCSANOW, saved);
+      old := GetCurrentDir;
+      SetCurrentDir(dir);
+      RunShell(line);
+      SetCurrentDir(old);
+      ShellTtyRaw(saved);
+    end;
+    line := '';
+    Prompt;
+  end;
+
 begin
-  { MC-style Ctrl-O: switch to the shell screen and stay there until
-    Ctrl-O (or Esc) switches back — other keys are ignored }
+  { MC-style Ctrl-O: the shell screen with a live prompt. Commands run
+    on the real terminal (interactive full-screen programs included);
+    Ctrl-O — or Esc on an empty line — returns to the panels }
+  if ActiveP.Vfs.IsLocal then dir := ActiveP.Path else dir := GetCurrentDir;
+  histAt := CmdHist.Count;
   def_prog_mode;
   endwin;
   WriteLn;
-  Write('-- Ctrl-O to return --');
-  Flush(Output);
-  {$ifdef unix}
+  WriteLn('-- Ctrl-O returns to DN --');
   ShellTtyRaw(saved);
+  line := '';
+  Prompt;
   repeat
     b := #0;
     if fpRead(0, b, 1) <= 0 then Break;
-  until b in [#3, #15, #27];   // Ctrl-C / Ctrl-O / Esc return
+    case b of
+      #15: Break;                                  // Ctrl-O
+      #27: if not SwallowEscSeq then
+           begin
+             if line = '' then Break;              // bare Esc on empty line
+             EraseInput;
+           end;
+      #10, #13: RunLine;
+      #8, #127:
+        if line <> '' then
+        begin
+          while (line <> '') and ((Ord(line[Length(line)]) and $C0) = $80) do
+            SetLength(line, Length(line) - 1);
+          SetLength(line, Length(line) - 1);
+          Write(#8' '#8);
+          Flush(Output);
+        end;
+      #3:                                          // Ctrl-C drops the line
+        begin
+          WriteLn('^C');
+          line := '';
+          Prompt;
+        end;
+      #21: EraseInput;                             // Ctrl-U
+    else
+      if b >= #32 then                             // ASCII and UTF-8 bytes
+      begin
+        line := line + b;
+        Write(b);
+        Flush(Output);
+      end;
+    end;
+  until False;
   TCSetAttr(0, TCSANOW, saved);
-  {$endif}
   reset_prog_mode;
   refresh;
+  ReloadPanels;
 end;
+{$else}
+begin
+end;
+{$endif}
 
 procedure DoChangeDir(arg: AnsiString);
 var
@@ -1230,6 +1375,11 @@ begin
     cmColumnsRight: ColumnsDialog(RightP);
     { cmSyntaxHl is a checkbox: RunMenuBar toggles it in place }
     cmSaverSetup: DoSaverSetup;
+    cmConsole:
+      if ActiveP.Vfs.IsLocal then
+        FocusWin := OpenConsole(ActiveP.Path)
+      else
+        FocusWin := OpenConsole(GetCurrentDir);
   end;
 end;
 
@@ -1283,6 +1433,7 @@ begin
     KEY_F0 + 6: CycleFocus;
     KEY_F0 + 9: OpenMenu(0);
     KEY_F0 + 29: MoveMode := True;   // Ctrl-F5
+    15: ShowUserScreen;              // Ctrl-O: global, works over any window
   else
     case FocusWin.HandleKey(ch) of
       kaClose: TryCloseFocus;
