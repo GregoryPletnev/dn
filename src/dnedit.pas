@@ -9,13 +9,16 @@ unit dnedit;
 interface
 
 uses
-  Classes, dnwin, dnvfs;
+  Classes, dnwin, dnvfs, dnhighlite;
 
 type
   TEditWin = class(TWin)
   public
     Path: AnsiString;
     Lines: TStringList;
+    HlRules: THglRules;      // syntax highlighting rules for this file
+    HlStates: array of Integer; // comment state before each line
+    HlValid: Integer;        // states are computed for lines < HlValid
     CurX, CurY: Integer;        // 0-based column (codepoints) and line
     TopY, LeftX: Integer;
     Modified: Boolean;
@@ -35,6 +38,11 @@ type
     function ConfirmClose: Boolean; override;
     function Save: Boolean;
     procedure FindNext(FromNext: Boolean);
+  private
+    { mark the buffer modified; edits change comment state of every
+      following line, so the state cache is cut at the edit point }
+    procedure MarkEdit;
+    procedure EnsureHlStates(UpTo: Integer);
   end;
 
 function OpenEditor(const Path: AnsiString): TEditWin;
@@ -42,7 +50,7 @@ function OpenEditor(const Path: AnsiString): TEditWin;
 implementation
 
 uses
-  SysUtils, ncurses, dnscreen, dndialog;
+  SysUtils, ncurses, dnscreen, dndialog, dnoptions;
 
 var
   Cascade: Integer = 0;
@@ -63,6 +71,30 @@ begin
   CurX := 0; CurY := 0; TopY := 0; LeftX := 0;
   Modified := False;
   Overwrite := False;
+  HlRules := HglForFile(ExtractFileName(APath));
+  HlValid := 0;
+end;
+
+procedure TEditWin.MarkEdit;
+begin
+  Modified := True;
+  if CurY - 1 < HlValid then
+    HlValid := CurY - 1;
+  if HlValid < 0 then HlValid := 0;
+end;
+
+procedure TEditWin.EnsureHlStates(UpTo: Integer);
+var
+  i: Integer;
+begin
+  if UpTo > Lines.Count then UpTo := Lines.Count;
+  if HlValid > Lines.Count then HlValid := Lines.Count;
+  if Length(HlStates) < Lines.Count + 1 then
+    SetLength(HlStates, Lines.Count + 1);
+  HlStates[0] := -1;
+  for i := HlValid to UpTo - 1 do
+    HlStates[i + 1] := HglNextState(HlRules, Lines[i], HlStates[i]);
+  if UpTo > HlValid then HlValid := UpTo;
 end;
 
 destructor TEditWin.Destroy;
@@ -95,13 +127,21 @@ begin
   if CurX < LeftX then LeftX := CurX;
   if CurX >= LeftX + cw then LeftX := CurX - cw + 1;
 
+  if Opt.SyntaxHl and HlRules.Valid then
+    EnsureHlStates(TopY + chh);
   for j := 0 to chh - 1 do
   begin
-    if TopY + j < Lines.Count then
-      s := Utf8Copy(Lines[TopY + j], LeftX + 1, cw)
+    if (TopY + j < Lines.Count) and Opt.SyntaxHl and HlRules.Valid then
+      PutHlLine(Y + 1 + j, X + 1, Lines[TopY + j], LeftX, cw, HlRules, cpViewer,
+                HlStates[TopY + j])
     else
-      s := '';
-    PutStr(Y + 1 + j, X + 1, Utf8PadRight(s, cw), cpViewer);
+    begin
+      if TopY + j < Lines.Count then
+        s := Utf8Copy(Lines[TopY + j], LeftX + 1, cw)
+      else
+        s := '';
+      PutStr(Y + 1 + j, X + 1, Utf8PadRight(s, cw), cpViewer);
+    end;
   end;
 
   { cursor cell, DN-style inverse }
@@ -215,7 +255,7 @@ begin
         Lines.Insert(CurY + 1, rest);
         Inc(CurY);
         CurX := 0;
-        Modified := True;
+        MarkEdit;
       end;
     KEY_BACKSPACE, 127, 8:
       if CurX > 0 then
@@ -223,7 +263,7 @@ begin
         Delete(s, Utf8BytePos(s, CurX), Utf8CharBytes(s, Utf8BytePos(s, CurX)));
         Lines[CurY] := s;
         Dec(CurX);
-        Modified := True;
+        MarkEdit;
       end
       else if CurY > 0 then
       begin
@@ -231,20 +271,20 @@ begin
         Lines[CurY - 1] := Lines[CurY - 1] + s;
         Lines.Delete(CurY);
         Dec(CurY);
-        Modified := True;
+        MarkEdit;
       end;
     KEY_DC:
       if CurX < Utf8Len(s) then
       begin
         Delete(s, Utf8BytePos(s, CurX + 1), Utf8CharBytes(s, Utf8BytePos(s, CurX + 1)));
         Lines[CurY] := s;
-        Modified := True;
+        MarkEdit;
       end
       else if CurY < Lines.Count - 1 then
       begin
         Lines[CurY] := s + Lines[CurY + 1];
         Lines.Delete(CurY + 1);
-        Modified := True;
+        MarkEdit;
       end;
     25: { Ctrl-Y: delete line }
       begin
@@ -254,14 +294,14 @@ begin
           Lines[0] := '';
         if CurY > Lines.Count - 1 then CurY := Lines.Count - 1;
         CurX := 0;
-        Modified := True;
+        MarkEdit;
       end;
     9: { Tab: four spaces }
       begin
         Insert('    ', s, Utf8BytePos(s, CurX + 1));
         Lines[CurY] := s;
         Inc(CurX, 4);
-        Modified := True;
+        MarkEdit;
       end;
     KEY_F0 + 2: Save;
     KEY_F0 + 7:
@@ -296,7 +336,7 @@ begin
   Insert(t, s, bp);
   Lines[CurY] := s;
   Inc(CurX, Utf8Len(t));
-  Modified := True;
+  MarkEdit;
 end;
 
 function TEditWin.HandleText(const s: AnsiString): TKeyAction;

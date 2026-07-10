@@ -6,13 +6,16 @@ unit dnview;
 interface
 
 uses
-  Classes, dnwin;
+  Classes, dnwin, dnhighlite;
 
 type
   TViewWin = class(TWin)
   public
     Content: TStringList;      // owned
     Top, Ofs: Integer;
+    HlRules: THglRules;        // syntax rules; Valid=False for plain text
+    HlStates: array of Integer; // comment state before each line
+    procedure ApplyHlRules(const R: THglRules);
     constructor CreateView(const ATitle: AnsiString; AContent: TStringList);
     destructor Destroy; override;
     procedure DrawContent(Focused: Boolean); override;
@@ -28,7 +31,7 @@ function OpenTextView(const ATitle: AnsiString; L: TStringList): TViewWin;
 implementation
 
 uses
-  SysUtils, ncurses, dnscreen, dndialog;
+  SysUtils, ncurses, dnscreen, dndialog, dnoptions;
 
 var
   Cascade: Integer = 0;
@@ -124,6 +127,20 @@ begin
   inherited;
 end;
 
+{ the content never changes, so line states are computed once }
+procedure TViewWin.ApplyHlRules(const R: THglRules);
+var
+  i: Integer;
+begin
+  HlRules := R;
+  HlStates := nil;
+  if not R.Valid then Exit;
+  SetLength(HlStates, Content.Count + 1);
+  HlStates[0] := -1;
+  for i := 0 to Content.Count - 1 do
+    HlStates[i + 1] := HglNextState(R, Content[i], HlStates[i]);
+end;
+
 function TViewWin.StatusText: AnsiString;
 var
   pct: Integer;
@@ -144,11 +161,17 @@ begin
   cw := W - 2;
   for j := 0 to H - 3 do
   begin
-    if Top + j < Content.Count then
-      s := Utf8Copy(Content[Top + j], Ofs + 1, cw)
+    if (Top + j < Content.Count) and Opt.SyntaxHl and HlRules.Valid then
+      PutHlLine(Y + 1 + j, X + 1, Content[Top + j], Ofs, cw, HlRules, cpViewer,
+                HlStates[Top + j])
     else
-      s := '';
-    PutStr(Y + 1 + j, X + 1, Utf8PadRight(s, cw), cpViewer);
+    begin
+      if Top + j < Content.Count then
+        s := Utf8Copy(Content[Top + j], Ofs + 1, cw)
+      else
+        s := '';
+      PutStr(Y + 1 + j, X + 1, Utf8PadRight(s, cw), cpViewer);
+    end;
   end;
 end;
 
@@ -228,6 +251,7 @@ begin
       buf[i] := '.';
   L.Text := StringReplace(buf, #9, '        ', [rfReplaceAll]);
   Result := OpenTextView(ExtractFileName(Path) + ' — ' + Path, L);
+  Result.ApplyHlRules(HglForFile(ExtractFileName(Path)));
 end;
 
 end.

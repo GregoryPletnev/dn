@@ -35,6 +35,9 @@ type
     ColTime: Boolean;
     Palette: Integer;           // pal* constant
     Hl: THlGroups;              // per-file-type colors
+    SyntaxHl: Boolean;          // syntax highlighting in editor/viewer
+    SaverDelay: Integer;        // screen saver idle minutes, 0 = off
+    SaverType: Integer;         // dnsaver sv* constant
   end;
 
 const
@@ -59,7 +62,10 @@ var
       (Mask: '*.zip,*.tar,*.tgz,*.tbz,*.gz,*.bz2,*.xz,*.7z,*.rar'; Color: 3), // yellow
       (Mask: '*.dmg,*.iso,*.img,*.sparseimage'; Color: 5),                // magenta
       (Mask: ''; Color: 7)                                                // custom, off
-    )
+    );
+    SyntaxHl: True;
+    SaverDelay: 5;
+    SaverType: 0
   );
 
 procedure OptLoad;
@@ -112,6 +118,11 @@ begin
     Opt.ColTime := AsBool(L.Values['col_time'], Opt.ColTime);
     p := StrToIntDef(L.Values['palette'], Opt.Palette);
     if (p >= palClassic) and (p <= palBW) then Opt.Palette := p;
+    Opt.SyntaxHl := AsBool(L.Values['syntax_hl'], Opt.SyntaxHl);
+    p := StrToIntDef(L.Values['saver_delay'], Opt.SaverDelay);
+    if (p >= 0) and (p <= 999) then Opt.SaverDelay := p;
+    p := StrToIntDef(L.Values['saver_type'], Opt.SaverType);
+    if (p >= 0) and (p <= 2) then Opt.SaverType := p;
     for i := 1 to HlGroupCount do
     begin
       k := 'hl' + IntToStr(i);
@@ -143,6 +154,9 @@ begin
     L.Add('col_date=' + BoolStr(Opt.ColDate));
     L.Add('col_time=' + BoolStr(Opt.ColTime));
     L.Add('palette=' + IntToStr(Opt.Palette));
+    L.Add('syntax_hl=' + BoolStr(Opt.SyntaxHl));
+    L.Add('saver_delay=' + IntToStr(Opt.SaverDelay));
+    L.Add('saver_type=' + IntToStr(Opt.SaverType));
     for i := 1 to HlGroupCount do
     begin
       k := 'hl' + IntToStr(i);

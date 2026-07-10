@@ -27,6 +27,13 @@ const
   cpHl2       = 15;
   cpHl3       = 16;
   cpHl4       = 17;
+  { editor/viewer syntax highlighting (dnhighlite hh* classes) }
+  cpSynNumber  = 18;
+  cpSynString  = 19;
+  cpSynComment = 20;
+  cpSynSymbol  = 21;
+  cpSynKw1     = 22;
+  cpSynKw2     = 23;
 
   { Mouse button masks for NCURSES_MOUSE_VERSION = 2 (5 bits per button,
     mask = m shl ((btn-1)*5)). The FPC binding's BUTTON* constants use the
@@ -131,8 +138,32 @@ begin
 end;
 
 procedure ApplyPalette(Scheme: Integer);
+var
+  synBG: LongInt;
 begin
   if Scheme = 0 then PanelBG := COLOR_BLUE else PanelBG := COLOR_BLACK;
+  { syntax pairs follow the viewer background; the draw code adds bold
+    for comments (dark gray) and keywords }
+  if Scheme = 0 then synBG := COLOR_BLUE else synBG := COLOR_BLACK;
+  if Scheme = 2 then
+  begin
+    { monochrome: only bold-at-draw distinguishes the classes }
+    init_pair(cpSynNumber,  COLOR_WHITE, synBG);
+    init_pair(cpSynString,  COLOR_WHITE, synBG);
+    init_pair(cpSynComment, COLOR_WHITE, synBG);
+    init_pair(cpSynSymbol,  COLOR_WHITE, synBG);
+    init_pair(cpSynKw1,     COLOR_WHITE, synBG);
+    init_pair(cpSynKw2,     COLOR_WHITE, synBG);
+  end
+  else
+  begin
+    init_pair(cpSynNumber,  COLOR_GREEN,  synBG);
+    init_pair(cpSynString,  COLOR_CYAN,   synBG);
+    init_pair(cpSynComment, COLOR_BLACK,  synBG);
+    init_pair(cpSynSymbol,  COLOR_YELLOW, synBG);
+    init_pair(cpSynKw1,     COLOR_WHITE,  synBG);
+    init_pair(cpSynKw2,     COLOR_YELLOW, synBG);
+  end;
   case Scheme of
     1: begin  { dark: black background }
       init_pair(cpFrame,     COLOR_WHITE,  COLOR_BLACK);

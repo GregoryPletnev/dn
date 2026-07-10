@@ -9,7 +9,7 @@ uses
   SysUtils, Classes, ncurses,
   dnscreen, dnpanel, dnmenu, dndialog, dnfileops, dntetris,
   dnwin, dnview, dnedit, dnconfig, dnoptions, dnvfs, dnarcvfs, dnmount,
-  dnsftp, dnsession, dnsessui, dnuu, dnusermenu;
+  dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver;
 
 {$ifdef darwin}
 function setenv(name, value: PChar; overwrite: LongInt): LongInt;
@@ -1066,6 +1066,37 @@ begin
   OptSave;
 end;
 
+procedure DoSaverSetup;
+var
+  L: TStringList;
+  idx: Integer;
+  m: AnsiString;
+begin
+  L := TStringList.Create;
+  try
+    L.Add('Off');
+    L.Add('Starry sky');
+    L.Add('Clock');
+    L.Add('Blank screen');
+    idx := ListDialog('Screen saver', L);
+  finally
+    L.Free;
+  end;
+  if idx < 0 then Exit;
+  if idx = 0 then
+    Opt.SaverDelay := 0
+  else
+  begin
+    Opt.SaverType := idx - 1;
+    if Opt.SaverDelay <= 0 then Opt.SaverDelay := 5;
+    m := IntToStr(Opt.SaverDelay);
+    if InputBox('Screen saver', 'Start after minutes of inactivity:', m) then
+      Opt.SaverDelay := StrToIntDef(m, Opt.SaverDelay);
+    if Opt.SaverDelay < 0 then Opt.SaverDelay := 0;
+  end;
+  OptSave;
+end;
+
 { --- user menu (F2) ------------------------------------------------------ }
 
 procedure DoUserMenu;
@@ -1197,6 +1228,8 @@ begin
     cmMenuEditLocal: DoMenuEdit(False);
     cmColumnsLeft: ColumnsDialog(LeftP);
     cmColumnsRight: ColumnsDialog(RightP);
+    { cmSyntaxHl is a checkbox: RunMenuBar toggles it in place }
+    cmSaverSetup: DoSaverSetup;
   end;
 end;
 
@@ -1636,6 +1669,7 @@ end;
 var
   ch: LongInt;
   startL, startR: AnsiString;
+  idleSecs, saverLimit: Integer;
 
 begin
   {$ifdef unix}
@@ -1665,11 +1699,27 @@ begin
   RedrawBase := @DrawBase;
   try
     timeout(1000);  // wake up every second for the clock
+    idleSecs := 0;
     repeat
       DrawAll;
       ch := getch;
       if ch <> ERR then
+      begin
+        idleSecs := 0;
         HandleKey(ch);
+      end
+      else
+      begin
+        { each ERR is one quiet 1s tick; after the configured idle time
+          the screen saver takes over (DN: Options > Screen saver) }
+        Inc(idleSecs);
+        saverLimit := SaverIdleLimit;
+        if (saverLimit > 0) and (idleSecs >= saverLimit) then
+        begin
+          RunSaver(Opt.SaverType);
+          idleSecs := 0;
+        end;
+      end;
       if Quit then
         while WinCount > 0 do
         begin

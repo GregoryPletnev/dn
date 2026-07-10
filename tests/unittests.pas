@@ -6,7 +6,7 @@ program unittests;
 
 uses
   SysUtils, Classes, dnscreen, dnpanel, dnfileops, dnuu, dnvfs, dnsftp,
-  dnsession, dnusermenu;
+  dnsession, dnusermenu, dnhighlite;
 
 var
   Failures: Integer = 0;
@@ -264,9 +264,195 @@ begin
           '100% done', 'expand %%');
 end;
 
+const
+  { class letters: . plain, n number, s string, c comment, y symbol,
+    k/K keyword bank 1/2 }
+  ClsLetters: array[hhNothing..hhKeyword2] of Char = ('.', 'n', 's', 'c', 'y', 'k', 'K');
+
+{ render classes as a string, one letter per byte }
+function ClsStr(const R: THglRules; const s: AnsiString): AnsiString;
+var
+  cls: THlClasses;
+  i: Integer;
+begin
+  Result := '';
+  cls := HglColorLine(R, s);
+  for i := 0 to High(cls) do
+    Result := Result + ClsLetters[cls[i]];
+end;
+
+{ same, carrying the multi-line comment state across calls }
+function ClsStrSt(const R: THglRules; const s: AnsiString; var st: Integer): AnsiString;
+var
+  cls: THlClasses;
+  i, stOut: Integer;
+begin
+  Result := '';
+  cls := HglColorLine(R, s, st, stOut);
+  st := stOut;
+  for i := 0 to High(cls) do
+    Result := Result + ClsLetters[cls[i]];
+end;
+
+procedure TestHighlite;
+var
+  pas, cs, sh, py, ini, none: THglRules;
+begin
+  pas := HglForFile('test.pas');
+  cs := HglForFile('main.c');
+  sh := HglForFile('run.sh');
+  py := HglForFile('tool.py');
+  ini := HglForFile('app.ini');
+  none := HglForFile('photo.jpg');
+
+  Check(pas.Valid, 'hgl pas rules found');
+  Check(cs.Valid, 'hgl c rules found');
+  Check(sh.Valid, 'hgl sh rules found');
+  Check(py.Valid, 'hgl py rules found');
+  Check(ini.Valid, 'hgl ini rules found');
+  Check(not none.Valid, 'hgl no rules for jpg');
+  Check(HglForFile('Makefile').Valid, 'hgl makefile by name');
+  Check(Length(pas.Keywords1) > 30, 'hgl pas keywords loaded');
+  Check(HglColorLine(none, 'text') = nil, 'no classes without rules');
+
+  { Pascal: keywords, strings, { } comments, // comments, $-hex }
+  CheckEq(ClsStr(pas, 'begin'), 'kkkkk', 'pas keyword');
+  CheckEq(ClsStr(pas, 'if x then'), 'kky.ykkkk', 'pas if/then');
+  CheckEq(ClsStr(pas, '{ note }'), 'cccccccc', 'pas brace comment');
+  CheckEq(ClsStr(pas, '(* x *)'), 'ccccccc', 'pas paren-star comment');
+  CheckEq(ClsStr(pas, 'x := 1; // c'), '.yyyynyycccc', 'pas line comment + number');
+  CheckEq(ClsStr(pas, 's := ''ab'''), '.yyyyssss', 'pas string');
+  CheckEq(ClsStr(pas, '$1F'), 'nnn', 'pas hex number');
+  CheckEq(ClsStr(pas, 'begins'), '......', 'pas keyword needs boundary');
+  CheckEq(ClsStr(pas, 'virtual'), 'KKKKKKK', 'pas keyword bank 2');
+  CheckEq(ClsStr(pas, 'BEGIN'), 'kkkkk', 'pas is case-insensitive');
+
+  { C: case sensitivity, 0x-hex, paired and line comments, escapes }
+  CheckEq(ClsStr(cs, 'return'), 'kkkkkk', 'c keyword');
+  CheckEq(ClsStr(cs, 'RETURN'), '......', 'c keyword is case-sensitive');
+  CheckEq(ClsStr(cs, '0x2A'), 'nnnn', 'c hex number');
+  CheckEq(ClsStr(cs, '/* x */ y'), 'cccccccy.', 'c paired comment ends');
+  CheckEq(ClsStr(cs, 'a /* x'), '.ycccc', 'c unterminated comment to EOL');
+  CheckEq(ClsStr(cs, '#include <a>'), 'KKKKKKKKyy.y', 'c preprocessor keyword');
+  CheckEq(ClsStr(cs, '"a\"b"'), 'ssssss', 'c escaped quote stays in string');
+
+  { unix types }
+  CheckEq(ClsStr(sh, 'exit # done'), 'kkkkycccccc', 'sh comment');
+  CheckEq(ClsStr(py, 'def f():'), 'kkky.yyy', 'py def');
+  CheckEq(ClsStr(ini, '; note'), 'cccccc', 'ini whole-line comment');
+end;
+
+procedure TestHighliteState;
+var
+  pas, cs, xml: THglRules;
+  st: Integer;
+begin
+  pas := HglForFile('a.pas');
+  cs := HglForFile('a.c');
+  xml := HglForFile('a.xml');
+
+  { pascal { } comment across three lines }
+  st := -1;
+  CheckEq(ClsStrSt(pas, 'x { c', st), '.yccc', 'ml open line');
+  Check(st >= 0, 'ml state open after {');
+  CheckEq(ClsStrSt(pas, 'inside', st), 'cccccc', 'ml middle line all comment');
+  Check(st >= 0, 'ml state persists');
+  CheckEq(ClsStrSt(pas, 'y } z', st), 'cccy.', 'ml close line');
+  Check(st = -1, 'ml state closed after }');
+
+  { C /* */ across lines; a string hides the comment opener }
+  st := -1;
+  CheckEq(ClsStrSt(cs, 'a /* x', st), '.ycccc', 'c ml open');
+  CheckEq(ClsStrSt(cs, 'b */ c', st), 'ccccy.', 'c ml close');
+  Check(st = -1, 'c ml closed');
+  st := -1;
+  CheckEq(ClsStrSt(cs, '"/* x"', st), 'ssssss', 'comment opener inside string');
+  Check(st = -1, 'string does not open comment');
+
+  { empty line inside a comment keeps the state }
+  st := -1;
+  ClsStrSt(pas, '(* a', st);
+  CheckEq(ClsStrSt(pas, '', st), '', 'ml empty line');
+  Check(st >= 0, 'ml state through empty line');
+
+  { xml <!-- --> across lines }
+  st := -1;
+  CheckEq(ClsStrSt(xml, '<a> <!-- c', st), 'y.yycccccc', 'xml ml open');
+  CheckEq(ClsStrSt(xml, 'z --> ok', st), 'cccccy..', 'xml ml close');
+  Check(st = -1, 'xml ml closed');
+end;
+
+procedure TestHighliteMore;
+var
+  sql, yml, csv: THglRules;
+  st: Integer;
+begin
+  sql := HglForFile('q.sql');
+  yml := HglForFile('c.yaml');
+  csv := HglForFile('d.csv');
+  Check(sql.Valid, 'hgl sql rules found');
+  Check(yml.Valid, 'hgl yaml rules found');
+  Check(csv.Valid, 'hgl csv rules found');
+  Check(HglForFile('c.yml').Valid, 'hgl yml mask');
+
+  CheckEq(ClsStr(sql, 'SELECT 1'), 'kkkkkkyn', 'sql keyword + number');
+  CheckEq(ClsStr(sql, 'select'), 'kkkkkk', 'sql is case-insensitive');
+  CheckEq(ClsStr(sql, '-- note'), 'ccccccc', 'sql line comment');
+  CheckEq(ClsStr(sql, '''ab'''), 'ssss', 'sql single-quoted string');
+  CheckEq(ClsStr(sql, 'varchar'), 'KKKKKKK', 'sql type keyword');
+  st := -1;
+  CheckEq(ClsStrSt(sql, 'a /* x', st), '.ycccc', 'sql ml comment opens');
+  Check(st >= 0, 'sql ml state');
+
+  CheckEq(ClsStr(yml, 'key: true # x'), '...yykkkkyccc', 'yaml key/bool/comment');
+  CheckEq(ClsStr(csv, '1.5,"a b",x'), 'nnnysssssy.', 'csv number/string/field');
+end;
+
+procedure TestMarkdown;
+var
+  md: THglRules;
+  st: Integer;
+begin
+  md := HglForFile('README.md');
+  Check(md.Valid, 'hgl md rules found');
+  CheckEq(ClsStr(md, '# Title'), 'kkkkkkk', 'md header whole line');
+  CheckEq(ClsStr(md, '## Sub h'), 'kkkkkkkk', 'md subheader');
+  CheckEq(ClsStr(md, '> quote'), 'KKKKKKK', 'md blockquote');
+  CheckEq(ClsStr(md, '- item'), 'KKKKKK', 'md list item');
+  CheckEq(ClsStr(md, 'a `b` c'), '..ccc..', 'md inline code span');
+  CheckEq(ClsStr(md, 'plain text'), '..........', 'md prose stays plain');
+  { fenced code block across lines }
+  st := -1;
+  CheckEq(ClsStrSt(md, '```pas', st), 'cccccc', 'md fence opens');
+  Check(st >= 0, 'md fence state');
+  CheckEq(ClsStrSt(md, 'x := 1;', st), 'ccccccc', 'md fenced line is code');
+  CheckEq(ClsStrSt(md, '```', st), 'ccc', 'md fence closes');
+  Check(st = -1, 'md fence state closed');
+
+  { a hard-wrapped list item: the indented tail keeps the item class }
+  st := -1;
+  CheckEq(ClsStrSt(md, '- long item', st), 'KKKKKKKKKKK', 'md wrapped item head');
+  CheckEq(ClsStrSt(md, '  tail', st), 'KKKKKK', 'md wrapped item tail');
+  CheckEq(ClsStrSt(md, '  more', st), 'KKKKKK', 'md wrap continues');
+  CheckEq(ClsStrSt(md, 'plain', st), '.....', 'md unindented line ends the item');
+  st := -1;
+  ClsStrSt(md, '- a', st);
+  CheckEq(ClsStrSt(md, '', st), '', 'md blank line');
+  Check(st = -1, 'md blank line ends the item');
+  CheckEq(ClsStrSt(md, '  code?', st), '.......', 'md indent after blank is plain');
+  { headers do not spill onto the next line }
+  st := -1;
+  ClsStrSt(md, '# H', st);
+  CheckEq(ClsStrSt(md, '  x', st), '...', 'md header has no continuation');
+end;
+
 begin
   TestUtf8;
   TestMatchMask;
+  TestHighlite;
+  TestHighliteState;
+  TestHighliteMore;
+  TestMarkdown;
   TestTreeSize;
   TestPads;
   TestUU;

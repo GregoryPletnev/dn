@@ -39,6 +39,8 @@ const
   cmMenuEditLocal  = 28;
   cmColumnsLeft  = 29;
   cmColumnsRight = 30;
+  cmSyntaxHl     = 31;
+  cmSaverSetup   = 32;
 
 procedure DrawBar(sel: Integer);
 { Modal menu loop; startSel = menu index to open (0-based), returns cm*. }
@@ -50,7 +52,7 @@ function MenuCount: Integer;
 implementation
 
 uses
-  SysUtils, ncurses, dnscreen;
+  SysUtils, ncurses, dnscreen, dnoptions;
 
 type
   TMenuItem = record
@@ -122,6 +124,8 @@ begin
   AddItem('', '', cmNone);            // separator
   AddItem('Colors...', '', cmColors);
   AddItem('Highlight groups...', '', cmHighlight);
+  AddItem('Syntax highlight', '', cmSyntaxHl);
+  AddItem('Screen saver...', '', cmSaverSetup);
   AddMenu('Right');
   AddItem('Sort by...', 'Alt-S', cmSortRight);
   AddItem('Filter...', '', cmFilterRight);
@@ -166,6 +170,29 @@ begin
       PutStr(0, Menus[i].X, Menus[i].Title, cpMenuBar);
 end;
 
+{ checkbox items render their live state; everything else is static }
+function ItemCaption(const it: TMenuItem): AnsiString;
+begin
+  Result := it.Caption;
+  if it.Cmd = cmSyntaxHl then
+    if Opt.SyntaxHl then
+      Result := '[x] ' + Result
+    else
+      Result := '[ ] ' + Result;
+end;
+
+{ Enter/click on a checkbox item flips it in place instead of closing
+  the menu; returns True when the command was consumed that way }
+function ToggleItem(cmd: Integer): Boolean;
+begin
+  Result := cmd = cmSyntaxHl;
+  if Result then
+  begin
+    Opt.SyntaxHl := not Opt.SyntaxHl;
+    OptSave;
+  end;
+end;
+
 function DropWidth(const m: TMenu): Integer;
 var
   i, w: Integer;
@@ -173,7 +200,7 @@ begin
   Result := 20;
   for i := 0 to High(m.Items) do
   begin
-    w := Length(m.Items[i].Caption) + Length(m.Items[i].Hotkey) + 6;
+    w := Length(ItemCaption(m.Items[i])) + Length(m.Items[i].Hotkey) + 6;
     if w > Result then Result := w;
   end;
 end;
@@ -228,7 +255,7 @@ var
     for j := 0 to High(m^.Items) do
     begin
       if (j = item) and Selectable(j) then pair := cpMenuSel else pair := cpMenuBar;
-      cap := ' ' + PadRight(m^.Items[j].Caption,
+      cap := ' ' + PadRight(ItemCaption(m^.Items[j]),
               w - 4 - Length(m^.Items[j].Hotkey)) + m^.Items[j].Hotkey + ' ';
       PutStr(2 + j, dx, bxColV, cpMenuBar);
       PutStr(2 + j, dx + 1, cap, pair);
@@ -266,7 +293,10 @@ begin
       KEY_DOWN: NextItem(1);
       10, 13, KEY_ENTER:
         if Selectable(item) then
-          Exit(Menus[sel].Items[item].Cmd);
+        begin
+          if not ToggleItem(Menus[sel].Items[item].Cmd) then
+            Exit(Menus[sel].Items[item].Cmd);
+        end;
       27, KEY_F0 + 9: Exit(cmNone);
       KEY_MOUSE:
         if getmouse(@me) = OK then
@@ -286,7 +316,8 @@ begin
           begin
             item := me.y - 2;
             if Selectable(item) then
-              Exit(Menus[sel].Items[item].Cmd);
+              if not ToggleItem(Menus[sel].Items[item].Cmd) then
+                Exit(Menus[sel].Items[item].Cmd);
           end
           else
             Exit(cmNone);
