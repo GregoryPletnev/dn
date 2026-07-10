@@ -25,6 +25,20 @@ def test_startup_forces_utf8_locale_for_box_drawing(sandbox):
         s.close()
 
 
+def test_startup_recovers_when_env_utf8_locale_is_not_generated(sandbox):
+    # SSH forwards the client's locale to hosts that never generated it:
+    # the env claims UTF-8 but setlocale(LC_CTYPE, '') fails
+    env = {'LC_ALL': 'xx_XX.UTF-8', 'LC_CTYPE': 'xx_XX.UTF-8',
+           'LANG': 'xx_XX.UTF-8'}
+    s = make_session(sandbox, env=env)
+    try:
+        s.wait_text('a.txt')
+        s.wait_for(lambda x: x.cell(1, 0).data == '╔' and x.cell(1, 39).data == '╗',
+                   desc='box drawing rendered as UTF-8')
+    finally:
+        s.close()
+
+
 def test_enter_and_leave_directory(dn, sandbox):
     # cursor: .. alpha beta a.txt b.txt
     dn.key('DOWN')                      # alpha

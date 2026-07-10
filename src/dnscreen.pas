@@ -85,15 +85,14 @@ implementation
 var
   PanelBG: LongInt = COLOR_BLUE;   // panel background of the active scheme
 
-function c_setenv(name, value: PChar; overwrite: LongInt): LongInt;
-  cdecl; external 'c' name 'setenv';
 function c_setlocale(category: LongInt; locale: PChar): PChar;
   cdecl; external 'c' name 'setlocale';
 
 const
-  { LC_CTYPE is 0 on glibc and Darwin; ncurses only needs character type
-    classification to be UTF-8 before initscr. }
-  LC_CTYPE_C = 0;
+  { LC_CTYPE differs per libc: 0 on glibc, 2 on Darwin (where 0 is LC_ALL).
+    ncurses only needs character type classification to be UTF-8 before
+    initscr. }
+  LC_CTYPE_C = {$ifdef darwin} 2 {$else} 0 {$endif};
 
 function IsUtf8Locale(const s: AnsiString): Boolean;
 var
@@ -110,24 +109,18 @@ begin
   loc := GetEnvironmentVariable('LC_ALL');
   if loc = '' then loc := GetEnvironmentVariable('LC_CTYPE');
   if loc = '' then loc := GetEnvironmentVariable('LANG');
-  if IsUtf8Locale(loc) then
-  begin
-    c_setlocale(LC_CTYPE_C, '');
+  { An env var promising UTF-8 is not enough: over SSH the client forwards
+    locales the host may never have generated, and setlocale fails — the
+    process stays in "C" and ncurses renders box-drawing bytes as ~U/~P. }
+  if IsUtf8Locale(loc) and (c_setlocale(LC_CTYPE_C, '') <> nil) then
     Exit;
-  end;
 
-  { Debian ships C.UTF-8 by default. macOS does not always have it, so keep
-    en_US.UTF-8 as a fallback for direct local runs. LC_ALL has priority over
-    LC_CTYPE, so set both before initscr; otherwise ncurses renders box-drawing
-    bytes as ~U/~P. }
-  c_setenv('LC_ALL', 'C.UTF-8', 1);
-  c_setenv('LC_CTYPE', 'C.UTF-8', 1);
-  if c_setlocale(LC_CTYPE_C, '') = nil then
-  begin
-    c_setenv('LC_ALL', 'en_US.UTF-8', 1);
-    c_setenv('LC_CTYPE', 'en_US.UTF-8', 1);
-    c_setlocale(LC_CTYPE_C, '');
-  end;
+  { Debian ships C.UTF-8 by default. macOS does not have it, so keep
+    en_US.UTF-8 as a fallback for direct local runs. Pass the names straight
+    to setlocale instead of exporting LC_ALL: env changes would leak into
+    every shell and tool DN spawns. }
+  if c_setlocale(LC_CTYPE_C, 'C.UTF-8') = nil then
+    c_setlocale(LC_CTYPE_C, 'en_US.UTF-8');
 end;
 
 procedure SetHlPair(idx, fg: Integer);
