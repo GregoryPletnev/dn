@@ -1,0 +1,36 @@
+stages:
+  - test
+  - package
+
+default:
+  tags:
+    - deb-dev
+
+variables:
+  DN_CONFIG_DIR: "$CI_PROJECT_DIR/.ci-dn-config"
+
+before_script:
+  - fpc -iV
+  - make --version
+  - python3 --version
+  - dpkg --version
+  - dpkg-deb --version
+  - rm -rf "$DN_CONFIG_DIR"
+  - mkdir -p "$DN_CONFIG_DIR"
+
+test:
+  stage: test
+  script:
+    - make test
+
+deb:
+  stage: package
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}" scripts/build-deb.sh
+  artifacts:
+    name: "dn-datanavigator-${CI_COMMIT_TAG}-${CI_RUNNER_EXECUTABLE_ARCH}"
+    paths:
+      - dist/*.deb
+    expire_in: 30 days
