@@ -148,10 +148,11 @@
     <img src="dn-icon.png" alt="DN - DataNavigator icon">
     <h1><span class="dn">DN</span> - DataNavigator</h1>
     <p class="tagline">The classic Dos Navigator, rebuilt for the modern terminal.<br>
-    Free Pascal + ncurses · macOS (Apple Silicon)</p>
+    Free Pascal + ncurses · macOS (Apple Silicon) · Debian/Ubuntu</p>
 
     <div class="cta">
-      <a class="btn" href="https://github.com/GregoryPletnev/dn/releases/latest/download/DN-DataNavigator-1.2.0-arm64.dmg">Download DMG (arm64)</a>
+      <a class="btn" href="https://github.com/GregoryPletnev/dn/releases/latest/download/DN-DataNavigator-latest-arm64.dmg">Download DMG (arm64)</a>
+      <a class="btn ghost" href="https://github.com/GregoryPletnev/dn/releases/latest/download/dn-datanavigator_latest_amd64.deb">Download .deb (amd64)</a>
       <a class="btn ghost" href="https://github.com/GregoryPletnev/dn">GitHub</a>
       <a class="btn ghost" href="https://t.me/My_CTO_Notes">Author's Telegram</a>
     </div>
@@ -238,6 +239,8 @@
       <p><b style="color:var(--white)">macOS (Apple Silicon):</b> download the
       DMG and drag the app to Applications. The image is signed and notarized,
       so Gatekeeper should not show warnings.</p>
+      <p style="margin-top:14px"><b style="color:var(--white)">Debian/Ubuntu:</b></p>
+      <code>curl -fsSL https://dn.pletnev.biz/install.sh | bash</code>
       <p style="margin-top:14px"><b style="color:var(--white)">From source:</b></p>
       <code>brew install fpc ncurses
 make &amp;&amp; bin/dn</code>

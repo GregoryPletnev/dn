@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # release.sh — one-shot release orchestration.
 #
-#   1. Build release binaries (macOS now; linux/windows are stubs — see below).
+#   1. Build local release binaries (macOS now; Windows is a stub).
 #   2. Push the release commit + tag to GitLab (origin, source of truth).
 #   3. Create the GitLab release (notes only, NO binary assets).
-#   4. Wait until the push-mirror has propagated the tag to GitHub.
-#   5. Create the matching GitHub release and upload the binaries there.
+#   4. Wait for the GitLab tag pipeline and download the Linux .deb artifact.
+#   5. Wait until the push-mirror has propagated the tag to GitHub.
+#   6. Create the matching GitHub release and upload the binaries there.
 #
 # The split is deliberate: GitLab is private and holds no binaries; the public
 # GitHub mirror is where users download from (GitHub Release assets). See
@@ -21,6 +22,7 @@
 #   MACOS_ADHOC=1     ad-hoc DMG (build-dmg.sh) instead of signed+notarized
 #   GITLAB_HOST / GITLAB_REPO       override; default derived from origin remote
 #   GITHUB_REPO=<owner>/<repo>      GitHub owner/repo (default GregoryPletnev/dn)
+#   GITLAB_CI_TIMEOUT=1200          seconds to wait for the tag pipeline
 #   MIRROR_TIMEOUT=600              seconds to wait for the mirror (default 600)
 set -euo pipefail
 
@@ -38,6 +40,7 @@ GITLAB_REPO="${GITLAB_REPO:-$(sed -E 's#^https?://[^/]+/(.+)\.git$#\1#' <<<"$ORI
 export GITLAB_HOST                       # so glab targets the right instance
 
 GITHUB_REPO="${GITHUB_REPO:-GregoryPletnev/dn}"
+GITLAB_CI_TIMEOUT="${GITLAB_CI_TIMEOUT:-1200}"
 MIRROR_TIMEOUT="${MIRROR_TIMEOUT:-600}"
 
 VERSION="${1:-}"
@@ -57,6 +60,7 @@ TAG="v$VERSION"
 say "Preflight"
 command -v glab >/dev/null || die "glab not found (brew install glab)"
 command -v gh   >/dev/null || die "gh not found (brew install gh)"
+command -v jq   >/dev/null || die "jq not found (brew install jq)"
 glab auth status --hostname "$GITLAB_HOST" >/dev/null 2>&1 \
     || die "glab not authenticated for $GITLAB_HOST (glab auth login --hostname $GITLAB_HOST)"
 glab repo view "$GITLAB_REPO" >/dev/null 2>&1 \
@@ -108,16 +112,14 @@ build_macos() {
     local dmg="$DIST/DN-DataNavigator-$VERSION-arm64.dmg"
     [[ -f "$dmg" ]] || die "expected DMG not produced: $dmg"
     ASSETS+=("$dmg")
+
+    local latest_dmg="$DIST/DN-DataNavigator-latest-arm64.dmg"
+    cp "$dmg" "$latest_dmg"
+    ASSETS+=("$latest_dmg")
 }
 
 build_linux() {
-    # SKIPPED for now. To enable: build the .deb on Linux (native or via
-    # colima/Docker or a GitLab CI runner — see PUBLISHING.md) so that
-    #   dist/dn-datanavigator_${VERSION}_arm64.deb  (and/or amd64)
-    # exists, then append it to ASSETS. Example once available:
-    #   local deb="$DIST/dn-datanavigator_${VERSION}_amd64.deb"
-    #   [[ -f "$deb" ]] && ASSETS+=("$deb")
-    warn "linux .deb build skipped (no Linux toolchain here) — will add later"
+    say "Linux .deb will be built by GitLab CI after $TAG is pushed"
 }
 
 build_windows() {
@@ -176,7 +178,73 @@ glab release create "$TAG" \
     --notes-file "$NOTES_TMP"
 
 # ---------------------------------------------------------------------------
-# 4. Wait for the push-mirror to carry the tag to GitHub
+# 4. GitLab CI .deb artifact
+# ---------------------------------------------------------------------------
+download_linux_deb() {
+    say "Waiting for GitLab CI .deb artifact (timeout ${GITLAB_CI_TIMEOUT}s)"
+    local deadline pipeline_json status pipeline_id web_url
+    deadline=$(( $(date +%s) + GITLAB_CI_TIMEOUT ))
+    while true; do
+        pipeline_json="$(glab ci list \
+            --repo "$GITLAB_REPO" \
+            --ref "$TAG" \
+            --scope tags \
+            --per-page 1 \
+            --output json 2>/dev/null || printf '[]')"
+        status="$(jq -r '.[0].status // empty' <<<"$pipeline_json")"
+        pipeline_id="$(jq -r '.[0].id // empty' <<<"$pipeline_json")"
+        web_url="$(jq -r '.[0].web_url // empty' <<<"$pipeline_json")"
+
+        case "$status" in
+            success)
+                say "GitLab tag pipeline passed${pipeline_id:+ (#$pipeline_id)}"
+                break
+                ;;
+            failed|canceled|skipped)
+                die "GitLab tag pipeline for $TAG ended with status '$status': $web_url"
+                ;;
+            "")
+                printf '     ...tag pipeline not created yet, retrying in 15s\n'
+                ;;
+            *)
+                printf '     ...pipeline %s, retrying in 15s\n' "$status"
+                ;;
+        esac
+
+        if (( $(date +%s) >= deadline )); then
+            die "GitLab tag pipeline for $TAG did not finish within ${GITLAB_CI_TIMEOUT}s"
+        fi
+        sleep 15
+    done
+
+    local artifact_dir deb deb_name release_deb arch latest_deb
+    artifact_dir="$DIST/gitlab-artifacts-$TAG"
+    rm -rf "$artifact_dir"
+    mkdir -p "$artifact_dir"
+    glab job artifact "$TAG" deb --repo "$GITLAB_REPO" --path "$artifact_dir"
+
+    deb="$(find "$artifact_dir" -type f -name '*.deb' | head -n 1)"
+    [[ -n "$deb" ]] || die "GitLab CI artifact for $TAG did not contain a .deb file"
+
+    deb_name="$(basename "$deb")"
+    release_deb="$DIST/$deb_name"
+    cp "$deb" "$release_deb"
+    ASSETS+=("$release_deb")
+
+    arch="${deb_name##*_}"
+    arch="${arch%.deb}"
+    latest_deb="$DIST/dn-datanavigator_latest_${arch}.deb"
+    cp "$deb" "$latest_deb"
+    ASSETS+=("$latest_deb")
+}
+
+download_linux_deb
+
+say "Release asset(s):"
+for a in "${ASSETS[@]}"; do printf '     %s (%s)\n' "$(basename "$a")" "$(du -h "$a" | cut -f1)"; done
+
+# ---------------------------------------------------------------------------
+# 5. Wait for the push-mirror to carry the tag to GitHub
 # ---------------------------------------------------------------------------
 say "Waiting for GitHub mirror to receive $TAG (timeout ${MIRROR_TIMEOUT}s)"
 deadline=$(( $(date +%s) + MIRROR_TIMEOUT ))
@@ -194,7 +262,7 @@ done
 say "Mirror is up to date"
 
 # ---------------------------------------------------------------------------
-# 5. GitHub release — copy of the notes + binaries uploaded here
+# 6. GitHub release — copy of the notes + binaries uploaded here
 # ---------------------------------------------------------------------------
 say "Creating GitHub release and uploading binaries"
 gh release create "$TAG" "${ASSETS[@]}" \
