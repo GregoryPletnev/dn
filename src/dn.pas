@@ -9,7 +9,7 @@ uses
   SysUtils, Classes, ncurses,
   dnscreen, dnpanel, dnmenu, dndialog, dnfileops, dntetris,
   dnwin, dnview, dnedit, dnconfig, dnoptions, dnvfs, dnarcvfs, dnmount,
-  dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver, dnconsole;
+  dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver, dnconsole, dngpm;
 
 {$ifdef darwin}
 function setenv(name, value: PChar; overwrite: LongInt): LongInt;
@@ -402,6 +402,7 @@ var
   old: AnsiString;
 begin
   def_prog_mode;
+  GpmSuspend;
   endwin;
   WriteLn;
   WriteLn(dir, '> ', cmd);
@@ -422,6 +423,7 @@ begin
     {$endif}
   end;
   reset_prog_mode;
+  GpmResume;
   refresh;
   ReloadPanels;
 end;
@@ -545,6 +547,7 @@ begin
   if ActiveP.Vfs.IsLocal then dir := ActiveP.Path else dir := GetCurrentDir;
   histAt := CmdHist.Count;
   def_prog_mode;
+  GpmSuspend;
   endwin;
   WriteLn;
   WriteLn('-- Ctrl-O returns to DN --');
@@ -589,6 +592,7 @@ begin
   until False;
   TCSetAttr(0, TCSANOW, saved);
   reset_prog_mode;
+  GpmResume;
   refresh;
   ReloadPanels;
 end;
@@ -800,6 +804,7 @@ end;
 procedure RunSshInteractive(const cmd: AnsiString);
 begin
   def_prog_mode;
+  GpmSuspend;
   endwin;
   WriteLn;
   {$ifdef unix}
@@ -811,6 +816,7 @@ begin
   WaitAnyKey;
   {$endif}
   reset_prog_mode;
+  GpmResume;
   refresh;
 end;
 
@@ -1504,18 +1510,14 @@ begin
   press := (me.bstate and (mbtn1Pressed or mbtn1Clicked or mbtn1Double or
                            mbtn1Triple)) <> 0;
 
-  { active drag: motion events move/resize, release ends it }
+  { active drag: motion events move/resize, release applies the final
+    position and ends it (gpm on the Linux console reports no motion,
+    only press and release) }
   if Drag <> dmNone then
   begin
     if (Drag <> dmSplit) and (WinIndex(DragWin) < 0) then
     begin
       Drag := dmNone;   // the window vanished under the pointer
-      DragWin := nil;
-      Exit;
-    end;
-    if (me.bstate and mbtn1Released) <> 0 then
-    begin
-      Drag := dmNone;
       DragWin := nil;
       Exit;
     end;
@@ -1534,6 +1536,11 @@ begin
         end;
       dmSplit:
         SetSplit(me.x);
+    end;
+    if (me.bstate and mbtn1Released) <> 0 then
+    begin
+      Drag := dmNone;
+      DragWin := nil;
     end;
     Exit;
   end;

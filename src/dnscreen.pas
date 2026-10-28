@@ -66,6 +66,10 @@ var
 
 procedure ScrInit;
 procedure ScrDone;
+{ ncurses getch/timeout, plus gpm mouse on the Linux console (dngpm).
+  Units list dnscreen after ncurses, so these take precedence. }
+function getch: LongInt;
+procedure timeout(delay: LongInt);
 { re-init the color pairs to one of the schemes (dnoptions pal* constants);
   ScrInit applies scheme 0, dn.pas re-applies the configured one }
 procedure ApplyPalette(Scheme: Integer);
@@ -89,8 +93,12 @@ function Utf8PadLeft(const s: AnsiString; w: Integer): AnsiString;
 
 implementation
 
+uses
+  dngpm;
+
 var
   PanelBG: LongInt = COLOR_BLUE;   // panel background of the active scheme
+  InputDelay: LongInt = -1;        // last timeout(): ms, -1 = blocking
 
 function c_setlocale(category: LongInt; locale: PChar): PChar;
   cdecl; external 'c' name 'setlocale';
@@ -215,6 +223,7 @@ end;
 procedure ScrInit;
 begin
   EnsureUtf8Locale;
+  GpmPreInit;
   initscr;
   { raw, not cbreak: keeps ^Y (macOS DSUSP), ^S/^Q, ^C as ordinary input
     instead of terminal control — an editor needs them as keystrokes }
@@ -236,13 +245,55 @@ begin
   refresh;
   Write(#27'[?1002h');
   Flush(Output);
+  GpmInit;
 end;
 
 procedure ScrDone;
 begin
+  GpmDone;
   Write(#27'[?1002l');
   Flush(Output);
   endwin;
+end;
+
+procedure timeout(delay: LongInt);
+begin
+  InputDelay := delay;
+  ncurses.timeout(delay);
+end;
+
+function getch: LongInt;
+var
+  deadline, now: QWord;
+  wait: LongInt;
+begin
+  if not GpmActive then
+    Exit(ncurses.getch);
+  { poll ncurses (which also flushes screen updates), then sleep on the
+    keyboard and the gpm socket together }
+  if InputDelay > 0 then
+    deadline := GetTickCount64 + QWord(InputDelay)
+  else
+    deadline := GetTickCount64;
+  ncurses.timeout(0);
+  try
+    repeat
+      Result := ncurses.getch;
+      if Result <> ERR then Exit;
+      GpmShowPointer;
+      if InputDelay < 0 then
+        wait := -1
+      else
+      begin
+        now := GetTickCount64;
+        if now >= deadline then Exit(ERR);
+        wait := deadline - now;
+      end;
+      GpmWait(wait);
+    until False;
+  finally
+    ncurses.timeout(InputDelay);
+  end;
 end;
 
 procedure PutStr(y, x: Integer; const s: AnsiString; pair: Integer; bold: Boolean);
