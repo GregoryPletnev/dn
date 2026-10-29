@@ -33,6 +33,20 @@ test:
   stage: test
   script:
     - make test
+    # Separate pytest run that only writes the JUnit XML report. The `make
+    # test` run above stays the pass/fail gate. Redundant pytest cost is
+    # acceptable for inline failure text in merge requests.
+    - tests/.venv/bin/pytest tests -q --junitxml=ci-junit.xml
+  after_script:
+    # Keep the job exit code from `script` and still upload the report when
+    # the pytest report run fails.
+    - if [ -f ci-junit.xml ]; then mkdir -p report && cp ci-junit.xml report/junit.xml; fi
+  artifacts:
+    when: always
+    paths:
+      - report/junit.xml
+    reports:
+      junit: report/junit.xml
 
 deb:
   stage: package
