@@ -5,11 +5,14 @@ program dn;
 {$mode objfpc}{$H+}
 
 uses
-  {$ifdef unix}clocale, Unix, BaseUnix, termio,{$endif}
+  {$ifdef unix}cthreads, clocale, Unix, BaseUnix, termio,{$endif}
   SysUtils, Classes, ncurses,
   dnscreen, dnpanel, dnmenu, dndialog, dnfileops, dntetris,
   dnwin, dnview, dnedit, dnconfig, dnoptions, dnvfs, dnarcvfs, dnmount,
-  dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver, dnconsole, dngpm;
+  dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver, dnconsole, dngpm,
+  dnplaylist, dnplayer, dnlsproto, dnls,
+  dndisks, dndisksui,
+  dnhttp, dnhtml, dncss, dnlayout, dnjs, dnbrowser;
 
 {$ifdef darwin}
 function setenv(name, value: PChar; overwrite: LongInt): LongInt;
@@ -57,6 +60,12 @@ var
   LastClickTick: QWord = 0;
   { panel split column, 0 = middle of the screen (Alt-[/], divider drag) }
   PanelSplit: Integer = 0;
+  { a URL given on the command line: opens the browser once the desktop runs }
+  StartUrl: AnsiString = '';
+
+procedure DoBrowser; forward;
+procedure OpenBrowserWin(const AUrl: AnsiString); forward;
+procedure MaybeOpenStartUrl; forward;
 
 type
   TDragMode = (dmNone, dmMoveWin, dmResizeWin, dmSplit);
@@ -66,6 +75,36 @@ var
   Drag: TDragMode = dmNone;
   DragWin: TWin = nil;
   DragOffX, DragOffY: Integer;
+
+{ True when any player window is open: the main loop then uses a fast
+  timeout so the visualizer animates. }
+function PlayerActive: Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  for i := 0 to WinCount - 1 do
+    if Wins[i] is TPlayerWin then Exit(True);
+end;
+
+{ Advance every open player window by one tick. }
+procedure TickPlayers;
+var
+  i: Integer;
+begin
+  for i := 0 to WinCount - 1 do
+    if Wins[i] is TPlayerWin then TPlayerWin(Wins[i]).Tick;
+end;
+
+{ Stop and close every player window (Alt-F8, or on quit). }
+procedure StopPlayers;
+var
+  i: Integer;
+begin
+  for i := WinCount - 1 downto 0 do
+    if Wins[i] is TPlayerWin then
+      TPlayerWin(Wins[i]).Stop;
+end;
 
 procedure DrawMenuBar;
 begin
@@ -675,6 +714,9 @@ begin
     DoChangeDir(Copy(cmd, 3, MaxInt))
   else if cmd = 'exit' then
     DoQuit
+  else if LooksLikeUrl(cmd) then
+    { a URL on the command line opens the browser instead of the shell }
+    OpenBrowserWin(cmd)
   else if ActiveP.Vfs.IsLocal then
     ShellExec(cmd, ActiveP.Path)
   else
@@ -728,9 +770,15 @@ begin
     w := OpenViewer(full);
     if w <> nil then FocusWin := w;
   end
+  else if cmd = '@browse' then
+    OpenBrowserWin(full)
+  else if cmd = '@play' then
+    FocusWin := OpenPlayer(full)
   else if cmd <> '' then
     ShellExec(StringReplace(cmd, '%f', AnsiQuotedStr(full, ''''),
               [rfReplaceAll]), ActiveP.Path)
+  else if IsAudioFile(f.Name) then
+    FocusWin := OpenPlayer(full)
   {$ifdef unix}
   else if fpAccess(PChar(full), X_OK) = 0 then
     ShellExec(AnsiQuotedStr(full, ''''), ActiveP.Path)
@@ -850,6 +898,31 @@ begin
     MsgBox('Connect', 'Not a valid sftp:// URL.', ['OK']);
 end;
 
+{ Disk > Disks: the removable-media window; Enter on a mounted volume
+  opens its mount point in the active panel }
+procedure DoDisks;
+var
+  path: AnsiString;
+begin
+  if DisksManager(path) = drOpen then
+  begin
+    if not ActiveP.Vfs.IsLocal then
+      ActiveP.SetVfs(LocalVFS, path)
+    else
+    begin
+      ActiveP.Path := path;
+      ActiveP.Cur := 0;
+      ActiveP.Top := 0;
+      ActiveP.Load;
+    end;
+    if ActiveP.Path = '' then
+    begin
+      ActiveP.Path := '/';
+      ActiveP.Load;
+    end;
+  end;
+end;
+
 procedure SortDialog(p: TPanel);
 var
   i: Integer;
@@ -950,7 +1023,7 @@ end;
 
 procedure DoReadFileList;
 var
-  path, err: AnsiString;
+  path: AnsiString;
   L, paths: TStringList;
   i: Integer;
   lv: TListVFS;
@@ -987,7 +1060,6 @@ begin
   end;
   lv := TListVFS.Create(ExtractFileName(path), paths);
   ActiveP.SetVfs(lv, '/');
-  err := '';
 end;
 
 procedure DoUUEncode;
@@ -1024,9 +1096,102 @@ var
   w: TWin;
   lp: AnsiString;
 begin
+  { F3 on a directory opens the player, queued recursively (PLAYER.md) }
+  if ActiveP.CurFile.IsDir and (ActiveP.CurFile.Name <> '..') and
+     ActiveP.Vfs.IsLocal then
+  begin
+    FocusWin := OpenPlayer(VfsJoin(ActiveP.Path, ActiveP.CurFile.Name));
+    Exit;
+  end;
   if not MaterializeCurrent(lp) then Exit;
   w := OpenViewer(lp);
   if w <> nil then FocusWin := w;
+end;
+
+{ Tools > Player: open the player on the active panel directory. }
+procedure DoPlayer;
+begin
+  if ActiveP.Vfs.IsLocal then
+    FocusWin := OpenPlayer(ActiveP.Path)
+  else
+    FocusWin := OpenPlayer(GetCurrentDir);
+end;
+
+{ Tools > Browser: open the browser on the URL prompt, or on the file under
+  the cursor when it is an html file in a local panel. }
+procedure DoBrowser;
+var
+  url, ext: AnsiString;
+begin
+  url := '';
+  if ActiveP.Vfs.IsLocal and (ActiveP.CurFile.Name <> '') and
+     (ActiveP.CurFile.Name <> '..') and not ActiveP.CurFile.IsDir then
+  begin
+    ext := LowerCase(Copy(ExtractFileExt(ActiveP.CurFile.Name), 2, MaxInt));
+    if (ext = 'htm') or (ext = 'html') or (ext = 'xhtml') or (ext = 'svg')
+       or (ext = 'xml') then
+      url := VfsJoin(ActiveP.Path, ActiveP.CurFile.Name);
+  end;
+  if url = '' then
+  begin
+    url := 'about:blank';
+    if not InputBox('Browser', 'Open URL:', url) then Exit;
+    url := Trim(url);
+    if url = '' then Exit;
+  end;
+  OpenBrowserWin(url);
+end;
+
+{ Opens the browser on AUrl and focuses it. }
+procedure OpenBrowserWin(const AUrl: AnsiString);
+begin
+  FocusWin := OpenBrowser(AUrl);
+end;
+
+{ Open the command-line URL, once, after the first frame. }
+procedure MaybeOpenStartUrl;
+begin
+  if StartUrl = '' then Exit;
+  OpenBrowserWin(StartUrl);
+  StartUrl := '';
+end;
+
+{ LocalSend: ask for a peer address, then send the selected files to it.
+  The helper process is not needed for the send path: the client runs in
+  this process, and the dialog blocks only for the duration of the send. }
+procedure DoLocalSend;
+var
+  base, err: AnsiString;
+  paths: TStringList;
+  i, sent: Integer;
+begin
+  if not ActiveP.Vfs.IsLocal then
+  begin
+    MsgBox('LocalSend', 'Sending works from a local panel only.', ['OK']);
+    Exit;
+  end;
+  paths := TStringList.Create;
+  try
+    for i := 0 to High(ActiveP.Files) do
+      if ActiveP.Files[i].Sel then
+        paths.Add(VfsJoin(ActiveP.Path, ActiveP.Files[i].Name));
+    if (paths.Count = 0) and (ActiveP.CurFile.Name <> '') then
+      paths.Add(VfsJoin(ActiveP.Path, ActiveP.CurFile.Name));
+    if paths.Count = 0 then
+    begin
+      MsgBox('LocalSend', 'No file is selected.', ['OK']);
+      Exit;
+    end;
+    base := '';
+    if not InputBox('LocalSend', 'Send to host:port', base) then Exit;
+    if base = '' then Exit;
+    if LsSend(base, paths, sent, err) then
+      MsgBox('LocalSend', 'Sent ' + IntToStr(sent) + ' file(s).', ['OK'])
+    else
+      MsgBox('LocalSend', 'Send failed:'#10 + err, ['OK']);
+  finally
+    paths.Free;
+  end;
 end;
 
 procedure DoEdit;
@@ -1067,9 +1232,10 @@ begin
     L.Add('  Ctrl-O           show shell screen (Ctrl-O returns)');
     L.Add('  Ctrl-R           re-read both panels');
     L.Add('  Ctrl-T           Tetris');
+    L.Add('  Alt-F8           stop the media player');
     L.Add('  F1               this help');
     L.Add('  F2               user menu (dn.mnu, see below)');
-    L.Add('  F3               view file');
+    L.Add('  F3               view file / play folder (player)');
     L.Add('  F4               edit file (MicroEd)');
     L.Add('  F5 / F6          copy / move to the other panel');
     L.Add('  F7 / F8          make directory / delete');
@@ -1368,6 +1534,7 @@ begin
     cmFilterRight: FilterDialog(RightP);
     cmSessions: DoSessions;
     cmSftpConnect: DoSftpConnect;
+    cmDisks: DoDisks;
     cmUUEncode: DoUUEncode;
     cmUUDecode: DoUUDecode;
     cmPanelSetup: DoPanelSetup;
@@ -1381,6 +1548,9 @@ begin
     cmColumnsRight: ColumnsDialog(RightP);
     { cmSyntaxHl is a checkbox: RunMenuBar toggles it in place }
     cmSaverSetup: DoSaverSetup;
+    cmPlayer: DoPlayer;
+    cmLocalSend: DoLocalSend;
+    cmBrowser: DoBrowser;
     cmConsole:
       if ActiveP.Vfs.IsLocal then
         FocusWin := OpenConsole(ActiveP.Path)
@@ -1494,6 +1664,19 @@ begin
   Assign(f, path);
   if FileExists(path) then Append(f) else Rewrite(f);
   WriteLn(f, Format('y=%d x=%d bstate=$%x', [me.y, me.x, me.bstate]));
+  Close(f);
+end;
+
+procedure LogMouseLine(const s: AnsiString);
+var
+  f: Text;
+  path: AnsiString;
+begin
+  path := GetEnvironmentVariable('DN_MOUSE_LOG');
+  if path = '' then Exit;
+  Assign(f, path);
+  if FileExists(path) then Append(f) else Rewrite(f);
+  WriteLn(f, s);
   Close(f);
 end;
 
@@ -1658,6 +1841,8 @@ begin
         SetActive(p);
         p.Cur := idx;
         p.InvertSel;
+        LogMouseLine(Format('right-click idx=%d name=%s sel=%s',
+          [idx, p.Files[idx].Name, BoolToStr(p.Files[idx].Sel, True)]));
       end
       else if (me.bstate and (mbtn1Pressed or mbtn1Clicked or
                               mbtn1Double or mbtn1Triple)) <> 0 then
@@ -1730,6 +1915,12 @@ begin
     Exit;
   end;
   if ch = KEY_RESIZE then Exit;
+  { Alt-F8: stop playback in every player window, global (PLAYER.md) }
+  if ch = KEY_F0 + 8 + 1000 then
+  begin
+    StopPlayers;
+    Exit;
+  end;
   if MoveMode then
   begin
     HandleMoveMode(ch);
@@ -1773,6 +1964,7 @@ begin
     3:         CompareDirs;                    // Ctrl+C: compare directories
     7:         CountDirSize;                   // Ctrl+G
     19:        DoSessions;                     // Ctrl+S: SSH sessions
+    4:         DoDisks;                        // Ctrl+D: removable disks
     21:        SwapPanels;                     // Ctrl+U
     5:         HistRecall(-1);                 // Ctrl+E: previous command
     24:        HistRecall(1);                  // Ctrl+X: next command
@@ -1784,6 +1976,7 @@ begin
     23:        DoReadFileList;                 // Ctrl+W: read file list
     18:        ReloadPanels;                   // Ctrl+R
     20:        RunTetris;                      // Ctrl+T
+    2:         DoBrowser;                      // Ctrl+B: browser
   else
     if (ch >= KEY_F0 + 1) and (ch <= KEY_F0 + 10) then
       DoFKey(ch - KEY_F0)
@@ -1828,6 +2021,10 @@ var
   ch: LongInt;
   startL, startR: AnsiString;
   idleSecs, saverLimit: Integer;
+  lastTick: QWord;
+  lsErr: AnsiString;
+  lsPort: Integer;
+  lsName: AnsiString;
 
 begin
   {$ifdef unix}
@@ -1840,8 +2037,32 @@ begin
   {$ifdef darwin}
   SetupTerminfo;
   {$endif}
-  if ParamCount >= 1 then startL := ParamStr(1) else startL := GetCurrentDir;
-  if ParamCount >= 2 then startR := ParamStr(2) else startR := GetUserDir;
+  { LocalSend helper mode: run the HTTP server and never enter the TUI.
+    The main process starts this with --localsend-server <port>. }
+  if (ParamCount >= 1) and (ParamStr(1) = '--localsend-server') then
+  begin
+    lsPort := LsDefaultPort;
+    if ParamCount >= 2 then
+      lsPort := StrToIntDef(ParamStr(2), LsDefaultPort);
+    lsName := 'DN';
+    if ParamCount >= 3 then
+      lsName := ParamStr(3);
+    LsSetDeviceName(lsName);
+    LsHelperMain(lsPort, lsName, GetUserDir);
+    Halt(0);
+  end;
+  if (ParamCount >= 1) and LooksLikeUrl(ParamStr(1)) then
+  begin
+    { dn <url>: the browser opens after the first frame }
+    StartUrl := ParamStr(1);
+    startL := GetCurrentDir;
+    startR := GetUserDir;
+  end
+  else
+  begin
+    if ParamCount >= 1 then startL := ParamStr(1) else startL := GetCurrentDir;
+    if ParamCount >= 2 then startR := ParamStr(2) else startR := GetUserDir;
+  end;
   CmdHist := TStringList.Create;
   HistoryLoad(CmdHist);
   OptLoad;
@@ -1856,8 +2077,20 @@ begin
   ApplyHlPairs;
   RedrawBase := @DrawBase;
   try
-    timeout(1000);  // wake up every second for the clock
+    { with a player open the loop wakes 4 times a second (visualizer, track
+      end); otherwise once a second, for the clock }
+    if PlayerActive then timeout(PlayerTickMs) else timeout(1000);
+    { start the LocalSend receive helper; failure is not fatal, the send
+      path and the rest of dn still work }
+    if Opt.LocalSendPort > 0 then
+    begin
+      lsErr := '';
+      LsSetDeviceName(Opt.LocalSendName);
+      LsStart(ParamStr(0), Opt.LocalSendPort, lsErr);
+    end;
     idleSecs := 0;
+    lastTick := GetTickCount64;
+    MaybeOpenStartUrl;
     repeat
       DrawAll;
       ch := getch;
@@ -1868,9 +2101,20 @@ begin
       end
       else
       begin
-        { each ERR is one quiet 1s tick; after the configured idle time
-          the screen saver takes over (DN: Options > Screen saver) }
-        Inc(idleSecs);
+        { a player window needs a fast tick for the visualizer and for
+          end-of-track detection }
+        if PlayerActive then TickPlayers;
+        { LocalSend: read helper events once per idle tick. A live session
+          resets the screen saver timer, so the saver never covers a
+          transfer dialog. }
+        DrainLsPipe;
+        if LsActive then idleSecs := 0;
+        { the screen saver counts real seconds of quiet, not ticks }
+        if GetTickCount64 - lastTick >= 1000 then
+        begin
+          Inc(idleSecs);
+          lastTick := GetTickCount64;
+        end;
         saverLimit := SaverIdleLimit;
         if (saverLimit > 0) and (idleSecs >= saverLimit) then
         begin
@@ -1878,6 +2122,13 @@ begin
           idleSecs := 0;
         end;
       end;
+      { the main-loop timeout: the smallest period of everything active }
+      if PlayerActive then
+        timeout(PlayerTickMs)
+      else if LsActive then
+        timeout(LsTickMs)
+      else
+        timeout(1000);
       if Quit then
         while WinCount > 0 do
         begin
@@ -1900,6 +2151,7 @@ begin
 
   HistorySave(CmdHist);
   CmdHist.Free;
+  LsStop;
   LeftP.Free;
   RightP.Free;
 end.

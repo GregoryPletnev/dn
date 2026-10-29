@@ -38,6 +38,12 @@ type
     SyntaxHl: Boolean;          // syntax highlighting in editor/viewer
     SaverDelay: Integer;        // screen saver idle minutes, 0 = off
     SaverType: Integer;         // dnsaver sv* constant
+    PlayerVolume: Integer;      // media player volume 0..100
+    PlayerViz: Integer;         // visualizer: 0 off, 1 bars, 2 scope
+    PlayerEqPreset: AnsiString;  // last equalizer preset name
+    PlayerEqBands: array[0..9] of Integer;  // last equalizer gains, dB
+    LocalSendPort: Integer;     // LocalSend receive port, 0 = receive off
+    LocalSendName: AnsiString;  // device name peers see
   end;
 
 const
@@ -65,7 +71,13 @@ var
     );
     SyntaxHl: True;
     SaverDelay: 5;
-    SaverType: 0
+    SaverType: 0;
+    PlayerVolume: 80;
+    PlayerViz: 0;
+    PlayerEqPreset: 'Flat';
+    PlayerEqBands: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    LocalSendPort: 0;
+    LocalSendName: 'DN'
   );
 
 procedure OptLoad;
@@ -123,6 +135,22 @@ begin
     if (p >= 0) and (p <= 999) then Opt.SaverDelay := p;
     p := StrToIntDef(L.Values['saver_type'], Opt.SaverType);
     if (p >= 0) and (p <= 2) then Opt.SaverType := p;
+    p := StrToIntDef(L.Values['player_volume'], Opt.PlayerVolume);
+    if (p >= 0) and (p <= 100) then Opt.PlayerVolume := p;
+    p := StrToIntDef(L.Values['player_viz'], Opt.PlayerViz);
+    if (p >= 0) and (p <= 2) then Opt.PlayerViz := p;
+    if L.Values['player_eq_preset'] <> '' then
+      Opt.PlayerEqPreset := L.Values['player_eq_preset'];
+    for i := 0 to 9 do
+    begin
+      p := StrToIntDef(L.Values['player_eq_band' + IntToStr(i)],
+                       Opt.PlayerEqBands[i]);
+      if (p >= -12) and (p <= 12) then Opt.PlayerEqBands[i] := p;
+    end;
+    p := StrToIntDef(L.Values['localsend_port'], Opt.LocalSendPort);
+    if (p >= 0) and (p <= 65535) then Opt.LocalSendPort := p;
+    if L.Values['localsend_name'] <> '' then
+      Opt.LocalSendName := L.Values['localsend_name'];
     for i := 1 to HlGroupCount do
     begin
       k := 'hl' + IntToStr(i);
@@ -157,6 +185,14 @@ begin
     L.Add('syntax_hl=' + BoolStr(Opt.SyntaxHl));
     L.Add('saver_delay=' + IntToStr(Opt.SaverDelay));
     L.Add('saver_type=' + IntToStr(Opt.SaverType));
+    L.Add('player_volume=' + IntToStr(Opt.PlayerVolume));
+    L.Add('player_viz=' + IntToStr(Opt.PlayerViz));
+    L.Add('player_eq_preset=' + Opt.PlayerEqPreset);
+    for i := 0 to 9 do
+      L.Add('player_eq_band' + IntToStr(i) + '=' +
+            IntToStr(Opt.PlayerEqBands[i]));
+    L.Add('localsend_port=' + IntToStr(Opt.LocalSendPort));
+    L.Add('localsend_name=' + Opt.LocalSendName);
     for i := 1 to HlGroupCount do
     begin
       k := 'hl' + IntToStr(i);

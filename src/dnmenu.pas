@@ -42,6 +42,10 @@ const
   cmSyntaxHl     = 31;
   cmSaverSetup   = 32;
   cmConsole      = 33;
+  cmPlayer       = 34;
+  cmLocalSend    = 35;
+  cmBrowser      = 36;
+  cmDisks        = 37;
 
 procedure DrawBar(sel: Integer);
 { Modal menu loop; startSel = menu index to open (0-based), returns cm*. }
@@ -109,13 +113,17 @@ begin
   AddMenu('Disk');
   AddItem('SSH sessions...', 'Ctrl-S', cmSessions);
   AddItem('Connect sftp...', '', cmSftpConnect);
+  AddItem('Disks...', 'Ctrl-D', cmDisks);
   AddMenu('Commands');
   AddItem('User menu', 'F2', cmUserMenu);
   AddItem('Re-read panels', 'Ctrl-R', cmRereadAll);
   AddItem('UU-encode file', 'Ctrl-F7', cmUUEncode);
   AddItem('UU-decode file', 'Ctrl-F8', cmUUDecode);
   AddMenu('Tools');
+  AddItem('Player', 'F3 on a folder', cmPlayer);
   AddItem('Console', '', cmConsole);
+  AddItem('LocalSend', '', cmLocalSend);
+  AddItem('Browser', 'Ctrl-B', cmBrowser);
   AddItem('Tetris', 'Ctrl-T', cmTetris);
   AddMenu('Options');
   AddItem('Panel setup...', '', cmPanelSetup);

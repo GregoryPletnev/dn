@@ -43,6 +43,12 @@ const
   mbtn1Clicked   = $4;
   mbtn1Double    = $8;
   mbtn1Triple    = $10;
+  mbtn2Released  = $20;
+  mbtn2Pressed   = $40;
+  mbtn2Clicked   = $80;
+  mbtn2Double    = $100;
+  mbtn2Triple    = $200;
+  mbtn3Released  = $400;
   mbtn3Pressed   = $800;
   mbtn3Clicked   = $1000;
   mbtn3Double    = $2000;
@@ -70,6 +76,15 @@ procedure ScrDone;
   Units list dnscreen after ncurses, so these take precedence. }
 function getch: LongInt;
 procedure timeout(delay: LongInt);
+{ Mouse shims. The FPC ncurses binding's mmask_t/MEVENT are built for
+  64-bit masks, but the ncurses on this machine uses 32-bit ones: the ABI
+  mismatch makes ncurses' own mouse support silently drop every report
+  (getch returns the raw ESC, never KEY_MOUSE). We therefore enable SGR
+  mouse (1006) ourselves and parse the reports here. Units list dnscreen
+  after ncurses, so these take precedence over the binding. }
+function getmouse(event: PMEVENT): LongInt;
+function ungetmouse(event: PMEVENT): LongInt;
+procedure MouseEnqueue(x, y: Integer; bstate: LongWord);
 { re-init the color pairs to one of the schemes (dnoptions pal* constants);
   ScrInit applies scheme 0, dn.pas re-applies the configured one }
 procedure ApplyPalette(Scheme: Integer);
@@ -99,6 +114,15 @@ uses
 var
   PanelBG: LongInt = COLOR_BLUE;   // panel background of the active scheme
   InputDelay: LongInt = -1;        // last timeout(): ms, -1 = blocking
+  { parsed mouse events waiting for getmouse; small ring, a burst of
+    clicks never exceeds it }
+  MouseQ: array[0..63] of MEVENT;
+  MouseHead, MouseTail: Integer;
+  { bytes the sequence decoder read but did not consume (a lone ESC or an
+    Alt-letter): getch hands them out before touching the terminal again.
+    ungetch cannot be used for this: ncurses does not reassemble a
+    sequence pushed back into its buffer, it returns the bytes one by one. }
+  PushQ: AnsiString;
 
 function c_setlocale(category: LongInt; locale: PChar): PChar;
   cdecl; external 'c' name 'setlocale';
@@ -229,21 +253,22 @@ begin
     instead of terminal control — an editor needs them as keystrokes }
   raw;
   noecho;
-  keypad(stdscr, True);
+  { keypad OFF: ncurses cannot decode the key sequences on this build (the
+    FPC binding's chtype is wider than the linked ncurses'), so getch returns
+    raw bytes and dnscreen decodes every sequence itself in DecodeSeq }
+  keypad(stdscr, False);
   curs_set(0);
   start_color;
   ApplyPalette(0);
-  mousemask(mAllMouseEvents, nil);
-  { Raw press/release only: ncurses' click/double-click synthesis is
-    timing-dependent and can swallow press events (a second quick click
-    may arrive as a lone RELEASED). We act on presses and detect double
-    clicks ourselves. }
-  mouseinterval(0);
-  { Button-motion tracking (xterm 1002): terminals send drag events.
-    Must go out AFTER ncurses' own mouse-enable string (flushed by
-    refresh), or its "?1000h" would downgrade tracking to clicks-only. }
+  { Do NOT call ncurses' mousemask: the FPC binding's mmask_t is 64-bit
+    while the linked ncurses uses 32-bit masks, so the call misaligns
+    ncurses' internal mouse state and every report is dropped. We enable the
+    terminal modes ourselves and parse the reports in getch instead. }
+  { Enable SGR mouse (1006) for exact coordinates, button-motion (1002) for
+    drag events. Must go out AFTER ncurses' refresh, or ncurses' own
+    mouse-enable string would overwrite these modes. }
   refresh;
-  Write(#27'[?1002h');
+  Write(#27'[?1000h'#27'[?1002h'#27'[?1006h');
   Flush(Output);
   GpmInit;
 end;
@@ -251,7 +276,7 @@ end;
 procedure ScrDone;
 begin
   GpmDone;
-  Write(#27'[?1002l');
+  Write(#27'[?1006l'#27'[?1002l'#27'[?1000l');
   Flush(Output);
   endwin;
 end;
@@ -262,13 +287,310 @@ begin
   ncurses.timeout(delay);
 end;
 
+{ --- SGR mouse parsing (xterm 1006) -------------------------------- }
+
+procedure MouseEnqueue(x, y: Integer; bstate: LongWord);
+begin
+  FillChar(MouseQ[MouseHead], SizeOf(MEVENT), 0);
+  MouseQ[MouseHead].x := x;
+  MouseQ[MouseHead].y := y;
+  MouseQ[MouseHead].bstate := bstate;
+  MouseHead := (MouseHead + 1) and 63;
+end;
+
+function MousePending: Boolean;
+begin
+  Result := MouseHead <> MouseTail;
+end;
+
+{ hand out one queued event. getch calls this when it returns KEY_MOUSE so
+  the event is already off the queue: a caller that ignores the mouse (Tetris,
+  the screen saver) does not wedge the queue and its next getch still returns
+  real keys. getmouse reads the event back. }
+var
+  MouseCurrent: MEVENT;
+  MouseHasCurrent: Boolean;
+
+function PopMouse: Boolean;
+begin
+  if not MousePending then Exit(False);
+  MouseCurrent := MouseQ[MouseTail];
+  MouseTail := (MouseTail + 1) and 63;
+  MouseHasCurrent := True;
+  Result := True;
+end;
+
+function getmouse(event: PMEVENT): LongInt;
+begin
+  if event = nil then Exit(ERR);
+  if not MouseHasCurrent then
+    if not PopMouse then Exit(ERR);
+  event^ := MouseCurrent;
+  MouseHasCurrent := False;
+  Result := OK;
+end;
+
+function ungetmouse(event: PMEVENT): LongInt;
+begin
+  if event = nil then Exit(ERR);
+  MouseTail := (MouseTail - 1) and 63;
+  MouseQ[MouseTail] := event^;
+  Result := OK;
+end;
+
+{ read one byte from ncurses with a short timeout: a sequence's bytes arrive
+  together, a lone ESC has no follow-up }
+function ReadRawByte: Integer;
+var
+  c: LongInt;
+begin
+  ncurses.timeout(30);
+  c := ncurses.getch;
+  ncurses.timeout(InputDelay);
+  if c = ERR then Result := -1 else Result := c and $FF;
+end;
+
+{ --- escape-sequence decoder -----------------------------------------
+  ncurses cannot decode key sequences on this build: the FPC binding's chtype
+  and mmask_t are wider than the linked ncurses' ones, so keypad matching and
+  mousemask both fail and getch returns raw bytes (ESC O F for End, ESC [ <
+  for the SGR mouse). keypad is therefore OFF (ScrInit) and every sequence is
+  decoded here: function keys, arrows, Home/End/PgUp/PgDn/Ins/Del and the SGR
+  mouse reports. Anything unrecognized comes back as ESC with its bytes queued
+  in PushQ, so a lone ESC and an Alt-letter still reach the caller. }
+
+type
+  TKeySeq = record
+    Seq: AnsiString;
+    Key: LongInt;
+  end;
+
+const
+  { xterm sequences in both CSI (\E[..) and SS3 (\EO..) forms }
+  KeySeqs: array[0..29] of TKeySeq = (
+    (Seq: 'OA'; Key: KEY_UP),
+    (Seq: 'OB'; Key: KEY_DOWN),
+    (Seq: 'OC'; Key: KEY_RIGHT),
+    (Seq: 'OD'; Key: KEY_LEFT),
+    (Seq: '[A'; Key: KEY_UP),
+    (Seq: '[B'; Key: KEY_DOWN),
+    (Seq: '[C'; Key: KEY_RIGHT),
+    (Seq: '[D'; Key: KEY_LEFT),
+    (Seq: 'OH'; Key: KEY_HOME),
+    (Seq: '[H'; Key: KEY_HOME),
+    (Seq: '[1~'; Key: KEY_HOME),
+    (Seq: '[7~'; Key: KEY_HOME),
+    (Seq: 'OF'; Key: KEY_END),
+    (Seq: '[F'; Key: KEY_END),
+    (Seq: '[4~'; Key: KEY_END),
+    (Seq: '[8~'; Key: KEY_END),
+    (Seq: '[5~'; Key: KEY_PPAGE),
+    (Seq: '[6~'; Key: KEY_NPAGE),
+    (Seq: '[2~'; Key: KEY_IC),
+    (Seq: '[3~'; Key: KEY_DC),
+    (Seq: '[1;2D'; Key: KEY_SLEFT),
+    (Seq: '[1;2C'; Key: KEY_SRIGHT),
+    (Seq: '[1;2A'; Key: KEY_SR),
+    (Seq: '[1;2B'; Key: KEY_SF),
+    (Seq: '[15;5~'; Key: KEY_F0 + 29),   // Ctrl-F5: move/resize a window
+    (Seq: '[19;3~'; Key: KEY_F0 + 8 + 1000),  // Alt-F8: stop playback
+    (Seq: 'OP'; Key: KEY_F0 + 1),
+    (Seq: 'OQ'; Key: KEY_F0 + 2),
+    (Seq: 'OR'; Key: KEY_F0 + 3),
+    (Seq: 'OS'; Key: KEY_F0 + 4)
+  );
+
+{ F5..F12: CSI \E[<n>~ with n = 15,17,18,19,20,21,23,24 }
+function FKeyNum(n: Integer; out Key: LongInt): Boolean;
+begin
+  case n of
+    15: Key := KEY_F0 + 5;
+    17: Key := KEY_F0 + 6;
+    18: Key := KEY_F0 + 7;
+    19: Key := KEY_F0 + 8;
+    20: Key := KEY_F0 + 9;
+    21: Key := KEY_F0 + 10;
+    23: Key := KEY_F0 + 11;
+    24: Key := KEY_F0 + 12;
+  else
+    Exit(False);
+  end;
+  Result := True;
+end;
+
+{ decode a sequence that begins after an ESC. Returns KEY_MOUSE for an SGR
+  report, the matching KEY_* for a known key, or 27 with the bytes queued in
+  PushQ when nothing matches. Called only after getch returned 27. }
+function DecodeSeq: LongInt;
+var
+  buf: AnsiString;
+  c, i, n: Integer;
+  b, x, y: Integer;
+  nb, btn: Integer;
+  bstate: LongWord;
+  press: Boolean;
+  nums: array[0..2] of Integer;
+  cur: Integer;
+
+  function Next: Integer;
+  begin
+    Result := ReadRawByte;
+    if Result >= 0 then buf := buf + Chr(Result);
+  end;
+
+  procedure QueueBytes;
+  begin
+    PushQ := PushQ + buf;
+  end;
+
+  procedure PutNum;
+  begin
+    if cur <= 2 then nums[cur] := nb;
+    Inc(cur);
+    nb := 0;
+  end;
+
+  function LastByte: Char;
+  begin
+    Result := buf[Length(buf)];
+  end;
+
+begin
+  Result := 27;
+  buf := '';
+  if Next < 0 then
+  begin
+    QueueBytes;                      // lone ESC: give it straight back
+    Exit;
+  end;
+  if not (LastByte in ['[', 'O']) then
+  begin
+    QueueBytes;                      // Alt-letter and the like
+    Exit;
+  end;
+  { SGR mouse report: ESC [ < b ; x ; y M|m }
+  if LastByte = '[' then
+  begin
+    if Next = Ord('<') then
+    begin
+      cur := 0; nb := 0;
+      press := True;
+      while True do
+      begin
+        if Next < 0 then
+        begin
+          QueueBytes;
+          Exit;
+        end;
+        c := Ord(LastByte);
+        if (c >= Ord('0')) and (c <= Ord('9')) then
+          nb := nb * 10 + (c - Ord('0'))
+        else if c = Ord(';') then
+          PutNum
+        else if (c = Ord('M')) or (c = Ord('m')) then
+        begin
+          PutNum;
+          press := c = Ord('M');
+          Break;
+        end
+        else
+        begin
+          QueueBytes;
+          Exit;
+        end;
+      end;
+      if cur < 3 then
+      begin
+        QueueBytes;
+        Exit;
+      end;
+      b := nums[0];
+      x := nums[1] - 1;
+      y := nums[2] - 1;
+      if x < 0 then x := 0;
+      if y < 0 then y := 0;
+      if x >= COLS then x := COLS - 1;
+      if y >= LINES then y := LINES - 1;
+      btn := b and 3;
+      if (b and 64) <> 0 then
+      begin
+        { wheel: 64 = up, 65 = down }
+        if btn = 0 then bstate := mbtnWheelUp
+        else bstate := mbtnWheelDown;
+      end
+      else if (b and 32) <> 0 then
+        bstate := mMousePosition        // motion with a button held
+      else if press then
+        case btn of
+          0: bstate := mbtn1Pressed;
+          1: bstate := mbtn2Pressed;
+          2: bstate := mbtn3Pressed;
+        else
+          bstate := 0;
+        end
+      else
+        case btn of
+          0: bstate := mbtn1Released;
+          1: bstate := mbtn2Released;
+          2: bstate := mbtn3Released;
+        else
+          bstate := 0;
+        end;
+      MouseEnqueue(x, y, bstate);
+      Exit(KEY_MOUSE);
+    end
+    else
+      { not a mouse report: keep the '[' and the byte just read, and go on
+        collecting a key sequence }
+      ;
+  end;
+  { collect up to a final byte: '~', or a letter for CSI/SS3 — but 'O'
+    alone is the SS3 introducer, not a final byte, so keep reading }
+  while (Length(buf) < 8) and
+        ((Length(buf) = 1) or
+         ((LastByte <> '~') and not ((LastByte >= 'A') and (LastByte <= 'Z')))) do
+    if Next < 0 then
+    begin
+      QueueBytes;
+      Exit;
+    end;
+  for i := 0 to High(KeySeqs) do
+    if KeySeqs[i].Seq = buf then Exit(KeySeqs[i].Key);
+  { CSI <n>~ : F5..F12, n is everything between '[' and '~' and must
+    be plain digits (a modifier like "15;5" is a different key, already in
+    the table) }
+  if (Length(buf) >= 3) and (LastByte = '~') and (buf[2] >= '1') and
+     (buf[2] <= '2') and (Pos(';', buf) = 0) then
+  begin
+    n := StrToIntDef(Copy(buf, 2, Length(buf) - 2), -1);
+    if FKeyNum(n, Result) then Exit;
+  end;
+  QueueBytes;
+  Result := 27;
+end;
+
 function getch: LongInt;
 var
   deadline, now: QWord;
   wait: LongInt;
+
+  function OneKey: LongInt;
+  begin
+    if PushQ <> '' then
+    begin
+      Result := Ord(PushQ[1]);
+      Delete(PushQ, 1, 1);
+      Exit;
+    end;
+    Result := ncurses.getch;
+    if Result = 27 then
+      Result := DecodeSeq;
+  end;
+
 begin
+  if PopMouse then Exit(KEY_MOUSE);
   if not GpmActive then
-    Exit(ncurses.getch);
+    Exit(OneKey);
   { poll ncurses (which also flushes screen updates), then sleep on the
     keyboard and the gpm socket together }
   if InputDelay > 0 then
@@ -278,7 +600,7 @@ begin
   ncurses.timeout(0);
   try
     repeat
-      Result := ncurses.getch;
+      Result := OneKey;
       if Result <> ERR then Exit;
       GpmShowPointer;
       if InputDelay < 0 then

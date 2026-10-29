@@ -14,7 +14,7 @@ function ConfigDir: AnsiString;
 procedure HistoryLoad(L: TStringList);
 procedure HistorySave(L: TStringList);
 { command for a file extension from dn.ext ('' if none).
-  Values: '@edit', '@view' or a shell command with %f placeholder. }
+  Values: '@edit', '@view', '@browse' or a shell command with %f placeholder. }
 function ExtCommand(const Ext: AnsiString): AnsiString;
 
 implementation

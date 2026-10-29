@@ -87,6 +87,9 @@ function LocalVFS: TLocalVFS;   // shared singleton
 function VfsJoin(const Dir, Name: AnsiString): AnsiString;
 { run a shell command, capture stdout+stderr; returns exit code }
 function RunCapture(const Cmd: AnsiString; out Output: AnsiString): Integer;
+{ run a shell command with Input on stdin, capture stdout+stderr }
+function RunCaptureInput(const Cmd, Input: AnsiString;
+                          out Output: AnsiString): Integer;
 { parse 'ls -la'-style listing lines (bsdtar -tv, sftp ls -la) }
 function ParseLsLine(const Line: AnsiString; out Item: TVfsItem;
                      out FullName: AnsiString): Boolean;
@@ -138,6 +141,50 @@ begin
       L.Free;
     end;
     DeleteFile(tmp);
+  end;
+end;
+
+function RunCaptureInput(const Cmd, Input: AnsiString;
+                          out Output: AnsiString): Integer;
+var
+  inF, outF: AnsiString;
+  L: TStringList;
+begin
+  Result := -1;
+  Output := '';
+  inF := GetTempDir + 'dnvfs-in-' + IntToStr(GetProcessID) + '-' +
+         IntToStr(Random(1000000)) + '.txt';
+  outF := GetTempDir + 'dnvfs-out-' + IntToStr(GetProcessID) + '-' +
+          IntToStr(Random(1000000)) + '.out';
+  L := TStringList.Create;
+  try
+    L.Text := Input;
+    try
+      L.SaveToFile(inF);
+    except
+      L.Free;
+      Exit;
+    end;
+  finally
+    L.Free;
+  end;
+  {$ifdef unix}
+  Result := fpSystem(Cmd + ' <' + AnsiQuotedStr(inF, '''') +
+                    ' >' + AnsiQuotedStr(outF, '''') + ' 2>&1');
+  if (Result and $7F) = 0 then
+    Result := (Result shr 8) and $FF;
+  {$endif}
+  DeleteFile(inF);
+  if FileExists(outF) then
+  begin
+    L := TStringList.Create;
+    try
+      L.LoadFromFile(outF);
+      Output := L.Text;
+    finally
+      L.Free;
+    end;
+    DeleteFile(outF);
   end;
 end;
 
