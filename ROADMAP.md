@@ -15,6 +15,30 @@ Cross-cutting groundwork, addressed as it blocks milestones:
 - **Progress dialogs** — long copy/delete/pack need a cancellable gauge
   (DN 3.1); prerequisite for archives and remote FS.
 
+## M8 — Text browser (own spec: `BROWSER.md`)
+
+A DN desktop window that renders the web: HTML5 parsing, a CSS subset, a
+text renderer into the `TWin` cell grid, and a JS bridge to an **external**
+process. Target: better than `lynx` on docs, news, RFCs, wikis and local
+files, and able to render JS-driven pages `lynx` cannot load at all.
+
+- [x] `src/dnhttp.pas` — `curl` fetch, `TUrl`, cookie jar, disk cache
+- [x] `src/dnhtml.pas` — WHATWG tokenizer + tree construction
+- [x] `src/dncss.pas` — CSS subset, cascade, user-agent stylesheet
+- [x] `src/dnlayout.pas` — block/inline/table/list layout into a box tree
+- [x] `src/dnbrowser.pas` — `TBrowserWin`, links, scrollback, history
+- [ ] `src/dnjs.pas` — the external JS bridge (flat-DOM protocol, shim,
+      timeout, `js: no engine` fallback)
+- [x] Entries: `Tools > Browser`, `dn.ext` `html=@browse`, command-line URL
+
+`dnjs.pas` builds and parses the flat-DOM protocol but is not wired into
+`TBrowserWin`: its external engine has no wall-clock kill, so a hung script
+would hang the UI. `TBrowserWin` says `js: not wired` rather than faking it.
+
+Size: XL — a project of its own, on the scale of the whole current DN
+(~15–23k lines, 11–16 months). Deliberately does **not** embed a JS engine:
+the GC and the event loop stay in the external process.
+
 ## M1 — Command line & launching (DN 2.1, 2.2, 4.1, 4.2, 17)
 
 - [x] Typed characters go to the command line; Enter executes via
@@ -108,6 +132,15 @@ Size: M.
 - [ ] SmartPad notepad (16) — MicroEd window over a fixed file
 - [ ] System information (13) — Unix flavor: uname/mem/disks
 - [ ] Spreadsheet (10) — flagship curiosity; own milestone if ever, last
+- [x] **Media player** — audio (MP3 first) in its own desktop window:
+      track list, transport controls, volume bar with mute, a text-mode
+      spectrum/oscilloscope visualizer, a 10-band equalizer, `.m3u`
+      playlists, recursive folder queues, ID3v2/Vorbis tags. Backend is an
+      external decoder (`ffplay` / `mpg123` / `afplay`), the same pattern as
+      archives and SFTP; the EQ is honest about backend support. Full spec in
+      `PLAYER.md`. Entry: F3 on a folder queues it recursively, Tools >
+      Player opens a directory picker, Enter on an audio file opens the
+      player.
 
 Size: M (without the spreadsheet).
 
@@ -117,7 +150,7 @@ Size: M (without the spreadsheet).
 - [ ] Color scheme editor (22.3) + a couple of shipped palettes
 - [ ] Mouse drag: enable motion tracking (1002) — window move/resize by
       mouse, panel splitter drag, scrollbar drag (features.txt leftovers)
-- [ ] Disk menu for Unix: mounted volumes list (/Volumes), df info,
+- [x] Disk menu for Unix: mounted volumes list (/Volumes), df info,
       volume label where applicable (6.2)
 - [ ] Keyboard macros (23.2)
 - [ ] Screen savers (23.1) — pure fun, keep the DN ones' spirit

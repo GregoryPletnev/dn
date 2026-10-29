@@ -99,7 +99,7 @@ Two layers, both run by `make test`:
 | Ctrl+T | Tetris (also Tools → Tetris) |
 | F1 | Help |
 | F2 | User menu (`dn.mnu`, see below) |
-| F3 | View file (in a window) |
+| F3 | View file (in a window); on a folder, open the media player |
 | F4 | Edit file in MicroEd, the built-in DN editor (in a window) |
 | F5 / F6 | Copy / move selection (or current file) to the other panel |
 | F7 | Make directory |
@@ -121,6 +121,7 @@ Two layers, both run by `make test`:
 | Ctrl+S | SSH session manager |
 | Ctrl+W | Read a file list into the panel (virtual listing) |
 | Ctrl+F7 / Ctrl+F8 | UU-encode / UU-decode the current file |
+| Alt-F8 | Stop and close every media player window |
 
 ## User menu (F2)
 
@@ -191,6 +192,47 @@ double-line frame on the focused window, `[■]` close and `[↕]` zoom icons
 Clicking a window focuses and raises it; clicking the panels focuses them.
 F10 from the panels quits, asking about every unsaved editor first.
 
+## Media player
+
+An audio player in its own desktop window (Tools → Player, or F3 on a
+folder). It queues every audio file under a folder recursively and plays
+MP3, M4A, AAC, FLAC, OGG, Opus, WAV, AIFF and WMA. Full spec in
+`PLAYER.md`.
+
+The window holds a track list with a cursor, a now-playing line, a progress
+bar, a volume bar, a text-mode spectrum analyzer, and a 10-band equalizer.
+Tags come from ID3v2, ID3v1 and Vorbis comments.
+
+Playback uses an external decoder, the same pattern as archives and SFTP.
+DN probes the `PATH` for `ffplay`, then `mpg123`, then `afplay`; override
+the command with `DN_PLAYER_CMD` (`%f` = file, `%s` = start offset).
+When no decoder is installed, the window still opens and the status line
+says `no player found`.
+
+| Key | Action |
+|-----|--------|
+| Enter | Play the row under the cursor |
+| Space | Play / pause |
+| Left / Right | Seek −5 s / +5 s |
+| Shift-Left / Shift-Right | Seek −30 s / +30 s |
+| Up / Down, PgUp / PgDn, Home / End | Move the cursor in the list |
+| + / − | Volume up / down |
+| M | Mute |
+| V | Visualizer: off → bars → scope |
+| E | Equalizer overlay |
+| T / Tab | Next equalizer preset |
+| R | Repeat: off → all → one |
+| S | Shuffle on / off |
+| Del | Remove the row from the queue |
+| F2 | Save the queue as `.m3u` |
+| F3 | Play a folder (queue it recursively) |
+| Alt-F8 | Stop and close every player window |
+| Esc, F10 | Close the player window |
+
+Playlists load from `.m3u` / `.m3u8` (`#EXTM3U` / `#EXTINF`) and from DN's
+own `.dnpl` format. Enter on an audio file opens the player through the
+`dn.ext` entry `mp3=@play`, or through the built-in audio-extension check.
+
 ## MicroEd
 
 F4 opens the built-in editor (a port of the spirit of
@@ -251,8 +293,8 @@ menu (F2), the multi-window desktop (viewer and editor windows),
 MicroEd, file operations F5/F6/F7/F8 with dialogs, virtual file systems
 (archives, disk images, SFTP), configurable colors and confirmations,
 window drag/resize by mouse, panel split (mouse or Alt+[ / Alt+]),
-help (F1), Tetris. Not yet: copying files by mouse drag, scrollbar
-thumb drag.
+help (F1), Tetris, the media player (playlists, volume, visualizer,
+equalizer). Not yet: copying files by mouse drag, scrollbar thumb drag.
 
 Known limitations:
 
