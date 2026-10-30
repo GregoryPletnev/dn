@@ -344,10 +344,13 @@ begin
         AddRun(Runs, '[' + alt + ']', st, Link, alt, False);
         Continue;
       end;
-      href := child.Attr('href');
       if child.Tag = 'a' then
-        if href = '' then
-          href := Link;
+      begin
+        href := child.Attr('href');
+        if href = '' then href := Link;
+      end
+      else
+        href := Link;
       CollectInline(child, Styles, Runs, href);
     end;
   end;
@@ -593,6 +596,7 @@ var
   marker: AnsiString;
   listIdx: Integer;
   s: AnsiString;
+  href: AnsiString;
 begin
   if N = nil then
     Exit;
@@ -667,7 +671,11 @@ begin
           LayoutNode(child, Styles, L, Indent, Avail);
         end
         else
-          CollectInline(child, Styles, runs, '');
+        begin
+          if child.Tag = 'a' then href := child.Attr('href')
+          else href := '';
+          CollectInline(child, Styles, runs, href);
+        end;
       end;
     end;
     if runs <> nil then

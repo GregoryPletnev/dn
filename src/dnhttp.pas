@@ -227,7 +227,11 @@ begin
   for i := 1 to Length(S) do
   begin
     c := S[i];
-    if c = ':' then Exit;
+    if c = ':' then
+    begin
+      if i > 1 then Result := LowerCase(Copy(S, 1, i - 1));
+      Exit;
+    end;
     if not (IsAlnum(c) or (c = '+') or (c = '-') or (c = '.')) then Exit;
   end;
   Result := '';

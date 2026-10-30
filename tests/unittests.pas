@@ -7,7 +7,7 @@ program unittests;
 uses
   SysUtils, Classes, dnscreen, dnpanel, dnfileops, dnuu, dnvfs, dnsftp,
   dnsession, dnusermenu, dnhighlite, dnplaylist, dnaudio, dnlsproto,
-  dnhtml, dncss;
+  dnhtml, dncss, dnhttp, dnlayout;
 
 var
   Failures: Integer = 0;
@@ -1953,6 +1953,52 @@ begin
   end;
 end;
 
+procedure TestUrlScheme;
+begin
+  CheckEq(UrlScheme('http://example.com/x'), 'http', 'url scheme http');
+  CheckEq(UrlScheme('https://example.com'), 'https', 'url scheme https');
+  CheckEq(UrlScheme('file:///tmp/a.html'), 'file', 'url scheme file');
+  CheckEq(UrlScheme('HTTP://EXAMPLE.COM'), 'http', 'url scheme is lower cased');
+  CheckEq(UrlScheme('example.com/x'), '', 'url scheme absent without colon');
+  CheckEq(UrlScheme('/tmp/a.html'), '', 'url scheme absent for a path');
+  CheckEq(UrlScheme(':x'), '', 'url scheme empty before colon');
+  CheckEq(UrlScheme(''), '', 'url scheme empty input');
+end;
+
+procedure TestLayoutLinks;
+var
+  doc: TDomDoc;
+  sh: TCssSheet;
+  m: TStyleMap;
+  L: TLayout;
+  i, j: Integer;
+  ln: TLayoutLine;
+  found: AnsiString;
+begin
+  doc := ParseHtml('<html><body><p>before <a href="file:///x.html">link</a>' +
+    ' after</p></body></html>');
+  sh := UserAgentSheet;
+  m := ComputeStyles(doc, sh);
+  L := LayoutDocument(doc, m, 60);
+  try
+    found := '';
+    for i := 0 to L.Count - 1 do
+    begin
+      ln := L.Get(i);
+      for j := 0 to High(ln.Runs) do
+        if ln.Runs[j].Link <> '' then found := ln.Runs[j].Link;
+    end;
+    CheckEq(found, 'file:///x.html', 'layout keeps the anchor href on its run');
+    CheckEq(LineText(L.Get(0)), 'before link after',
+      'layout keeps surrounding text around a link');
+  finally
+    L.Free;
+    m.Free;
+    sh.Free;
+    doc.Free;
+  end;
+end;
+
 begin
   TestUtf8;
   TestMatchMask;
@@ -1984,6 +2030,8 @@ begin
   TestCssMatch;
   TestCssCascade;
   TestCssUa;
+  TestUrlScheme;
+  TestLayoutLinks;
   if Failures = 0 then
     WriteLn(Checks, ' unit checks passed')
   else
