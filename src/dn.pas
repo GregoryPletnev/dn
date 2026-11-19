@@ -10,7 +10,7 @@ uses
   dnscreen, dnpanel, dnmenu, dndialog, dnfileops, dntetris,
   dnwin, dnview, dnedit, dnconfig, dnoptions, dnvfs, dnarcvfs, dnmount,
   dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver, dnconsole, dngpm,
-  dnplaylist, dnplayer, dnlsproto, dnls,
+  dnplaylist, dnplayer, dnlsproto, dnls, dnpath,
   dndisks, dndisksui,
   dnhttp, dnhtml, dncss, dnlayout, dnjs, dnbrowser;
 
@@ -2017,6 +2017,92 @@ begin
   end;
 end;
 
+{ Create LocalBinDir/dn as a symlink to the real file of the running
+  executable. Returns False and fills Err on failure; on success Exe and
+  Link name both ends. Prints nothing: the caller reports. }
+function InstallPathSymlink(out Exe, Link, Err: AnsiString): Boolean;
+var
+  dir: AnsiString;
+begin
+  Result := False;
+  Err := '';
+  Link := '';
+  { the real path, so a run through the link itself never makes the
+    link point at itself }
+  Exe := ExecutablePath;
+  if Exe = '' then
+  begin
+    Err := 'cannot resolve executable path: ' + ParamStr(0);
+    Exit;
+  end;
+  dir := LocalBinDir;
+  if dir = '' then
+  begin
+    Err := 'HOME is not set';
+    Exit;
+  end;
+  if not ForceDirectories(dir) then
+  begin
+    Err := 'cannot create ' + dir;
+    Exit;
+  end;
+  Link := IncludeTrailingPathDelimiter(dir) + 'dn';
+  { lstat, not FileExists: a dangling link left by a moved checkout must
+    be replaced, not reported as "cannot create" }
+  if LinkExists(Link) then
+  begin
+    if RealPath(Link) = Exe then
+    begin
+      Result := True;   { already resolves here (or is this very file) }
+      Exit;
+    end;
+    if not DeleteFile(Link) then
+    begin
+      Err := 'cannot replace ' + Link;
+      Exit;
+    end;
+  end;
+  if fpSymlink(PChar(Exe), PChar(Link)) <> 0 then
+  begin
+    Err := 'cannot create symlink ' + Link;
+    Exit;
+  end;
+  Result := True;
+end;
+
+{ One-time hint when dn is not reachable from the shell. Returns True
+  when the hint must be printed; the caller prints it after the TUI exits,
+  so ncurses never overwrites the line. Fires for a path-qualified launch
+  (`./bin/dn`, `~/src/dn/bin/dn`) when no `dn` is in PATH. Silent for a
+  bare-name launch (the shell found it, so it is in PATH), for a bundle,
+  when the terminal is not interactive, when DN_NO_PATH_HINT is set, and
+  when the hint was shown before. }
+function PathHintWanted: Boolean;
+var
+  exe: AnsiString;
+begin
+  Result := False;
+  if Opt.PathHintShown then Exit;
+  if GetEnvironmentVariable('DN_NO_PATH_HINT') <> '' then Exit;
+  if (IsATTY(0) = 0) or (IsATTY(1) = 0) then Exit;
+  if IsRelativeCommand(ParamStr(0)) then Exit;
+  exe := ExecutablePath;
+  if (exe = '') or IsAppBundle(exe) then Exit;
+  if FindInPath('dn', GetEnvironmentVariable('PATH')) <> '' then Exit;
+  if LocalBinDir = '' then Exit;
+  Result := True;
+end;
+
+{ Print the hint and remember it, so it appears once. The command is
+  spelled the way the user launched dn, since a bare `dn` would not run. }
+procedure PathHintShow;
+begin
+  WriteLn('dn is not in PATH. Run `', ParamStr(0),
+          ' --install-path` to link it into ', LocalBinDir, '.');
+  Opt.PathHintShown := True;
+  OptSave;
+end;
+
 var
   ch: LongInt;
   startL, startR: AnsiString;
@@ -2025,6 +2111,8 @@ var
   lsErr: AnsiString;
   lsPort: Integer;
   lsName: AnsiString;
+  ShowPathHint: Boolean;
+  instExe, instLink, instErr: AnsiString;
 
 begin
   {$ifdef unix}
@@ -2051,6 +2139,20 @@ begin
     LsHelperMain(lsPort, lsName, GetUserDir);
     Halt(0);
   end;
+  { dn --install-path: link the executable into ~/.local/bin and exit.
+    Runs before the TUI so the result goes to the plain terminal. }
+  if (ParamCount >= 1) and (ParamStr(1) = '--install-path') then
+  begin
+    if InstallPathSymlink(instExe, instLink, instErr) then
+    begin
+      WriteLn('dn: linked ', instLink, ' -> ', instExe);
+      if not DirInList(LocalBinDir, GetEnvironmentVariable('PATH')) then
+        WriteLn('dn: note: ', LocalBinDir, ' is not in PATH');
+      Halt(0);
+    end;
+    WriteLn(StdErr, 'dn: install-path failed: ', instErr);
+    Halt(1);
+  end;
   if (ParamCount >= 1) and LooksLikeUrl(ParamStr(1)) then
   begin
     { dn <url>: the browser opens after the first frame }
@@ -2066,6 +2168,7 @@ begin
   CmdHist := TStringList.Create;
   HistoryLoad(CmdHist);
   OptLoad;
+  ShowPathHint := PathHintWanted;
   LeftP := TPanel.Create(startL);
   RightP := TPanel.Create(startR);
   LeftP.Active := True;
@@ -2154,4 +2257,5 @@ begin
   LsStop;
   LeftP.Free;
   RightP.Free;
+  if ShowPathHint then PathHintShow;
 end.

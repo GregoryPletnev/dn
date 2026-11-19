@@ -37,10 +37,18 @@ Requirements:
 make        # builds bin/dn
 make run    # builds and runs
 make test   # builds and runs the TUI test suite
+make install  # links bin/dn into ~/.local/bin/dn
 ```
 
 `bin/dn [left-dir [right-dir]]` — optional arguments set the starting
 directory of each panel.
+
+`make install` (or `PREFIX=/opt make install`) puts a `dn` symlink on
+`PATH`. When you launch dn by a path (`./bin/dn`) and no `dn` is on
+`PATH`, dn prints a one-time hint after the first exit;
+`bin/dn --install-path` creates the `~/.local/bin/dn` symlink
+(`$XDG_BIN_HOME/dn` when that is set) on the spot. `DN_NO_PATH_HINT=1`
+silences the hint.
 
 ## Distribution (macOS, Apple Silicon)
 

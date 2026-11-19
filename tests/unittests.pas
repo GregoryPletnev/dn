@@ -5,9 +5,9 @@ program unittests;
 {$mode objfpc}{$H+}
 
 uses
-  SysUtils, Classes, dnscreen, dnpanel, dnfileops, dnuu, dnvfs, dnsftp,
+  BaseUnix, SysUtils, Classes, dnscreen, dnpanel, dnfileops, dnuu, dnvfs, dnsftp,
   dnsession, dnusermenu, dnhighlite, dnplaylist, dnaudio, dnlsproto,
-  dnhtml, dncss, dnhttp, dnlayout;
+  dnhtml, dncss, dnhttp, dnlayout, dnpath;
 
 var
   Failures: Integer = 0;
@@ -1999,6 +1999,125 @@ begin
   end;
 end;
 
+procedure TestPathList;
+var
+  dirs: TStringList;
+begin
+  dirs := PathList('/usr/bin:/bin::/opt/x');
+  try
+    CheckEq(IntToStr(dirs.Count), '3', 'PathList skips empty entries');
+    CheckEq(dirs[0], '/usr/bin', 'PathList first');
+    CheckEq(dirs[2], '/opt/x', 'PathList last');
+  finally
+    dirs.Free;
+  end;
+  dirs := PathList('');
+  try
+    CheckEq(IntToStr(dirs.Count), '0', 'PathList empty input');
+  finally
+    dirs.Free;
+  end;
+  dirs := PathList('a:b', ';');
+  try
+    CheckEq(IntToStr(dirs.Count), '1', 'PathList respects a custom separator');
+  finally
+    dirs.Free;
+  end;
+end;
+
+procedure TestFindInPath;
+var
+  base, d1, d2, p: AnsiString;
+  f: Text;
+begin
+  base := GetTempDir + 'dn-path-' + IntToStr(GetProcessID);
+  d1 := base + '/one';
+  d2 := base + '/two';
+  ForceDirectories(d1);
+  ForceDirectories(d2);
+  Assign(f, d2 + '/dn');
+  Rewrite(f);
+  WriteLn(f, 'x');
+  Close(f);
+  p := FindInPath('dn', d1 + ':' + d2);
+  CheckEq(p, d2 + '/dn', 'FindInPath finds the file in the second dir');
+  CheckEq(FindInPath('dn', d1), '', 'FindInPath returns "" when absent');
+  CheckEq(FindInPath('dn', ''), '', 'FindInPath empty list');
+  DeleteFile(d2 + '/dn');
+  RemoveDir(d1);
+  RemoveDir(d2);
+  RemoveDir(base);
+end;
+
+procedure TestDirInList;
+begin
+  Check(DirInList('/bin', '/usr/bin:/bin:/usr/local/bin'),
+        'DirInList exact match');
+  Check(not DirInList('/bin', '/usr/bin:/usr/local/bin'),
+        'DirInList rejects a prefix match');
+  Check(not DirInList('/bin', ''), 'DirInList empty list');
+end;
+
+procedure TestIsRelativeCommand;
+begin
+  Check(IsRelativeCommand('dn'), 'IsRelativeCommand bare name');
+  Check(not IsRelativeCommand('./dn'), 'IsRelativeCommand dot slash');
+  Check(not IsRelativeCommand('/usr/local/bin/dn'),
+        'IsRelativeCommand absolute path');
+  Check(not IsRelativeCommand('bin/dn'), 'IsRelativeCommand relative dir');
+  Check(not IsRelativeCommand(''), 'IsRelativeCommand empty');
+end;
+
+procedure TestResolveCommand;
+var
+  base, real, link: AnsiString;
+  f: Text;
+begin
+  base := ExcludeTrailingPathDelimiter(
+    RealPath(GetTempDir)) + '/dn-resolve-' + IntToStr(GetProcessID);
+  ForceDirectories(base + '/bin');
+  real := base + '/bin/dn';
+  Assign(f, real);
+  Rewrite(f);
+  WriteLn(f, 'x');
+  Close(f);
+  link := base + '/link';
+  CheckEq(ResolveCommand('dn', base + '/bin'), real,
+          'ResolveCommand looks a bare name up in PATH');
+  CheckEq(ResolveCommand('dn', '/nonexistent'), '',
+          'ResolveCommand bare name not in PATH');
+  CheckEq(ResolveCommand('/abs/dn', ''), '/abs/dn',
+          'ResolveCommand keeps an absolute path');
+  CheckEq(ResolveCommand('', base), '', 'ResolveCommand empty');
+  Check(fpSymlink(PChar(real), PChar(link)) = 0, 'symlink for RealPath');
+  CheckEq(RealPath(link), real, 'RealPath resolves a symlink');
+  CheckEq(RealPath(base + '/bin/../bin/dn'), real, 'RealPath folds ..');
+  CheckEq(RealPath(base + '/missing'), '', 'RealPath missing file');
+  Check(LinkExists(link), 'LinkExists live link');
+  DeleteFile(real);
+  Check(LinkExists(link), 'LinkExists dangling link');
+  Check(not FileExists(link), 'FileExists misses a dangling link');
+  CheckEq(RealPath(link), '', 'RealPath dangling link');
+  DeleteFile(link);
+  Check(not LinkExists(link), 'LinkExists after unlink');
+  RemoveDir(base + '/bin');
+  RemoveDir(base);
+end;
+
+procedure TestExecutablePath;
+begin
+  CheckEq(ExecutablePath, RealPath(ExpandFileName(ParamStr(0))),
+          'ExecutablePath is the real path of the test binary');
+end;
+
+procedure TestIsAppBundle;
+begin
+  Check(IsAppBundle('/Applications/DN.app/Contents/MacOS/dn'),
+        'IsAppBundle detects a bundle');
+  Check(not IsAppBundle('/usr/local/bin/dn'), 'IsAppBundle rejects a plain path');
+  Check(not IsAppBundle('/opt/DN/dn'), 'IsAppBundle needs the .app component');
+end;
+
 begin
   TestUtf8;
   TestMatchMask;
@@ -2032,6 +2151,13 @@ begin
   TestCssUa;
   TestUrlScheme;
   TestLayoutLinks;
+  TestPathList;
+  TestFindInPath;
+  TestDirInList;
+  TestIsRelativeCommand;
+  TestResolveCommand;
+  TestExecutablePath;
+  TestIsAppBundle;
   if Failures = 0 then
     WriteLn(Checks, ' unit checks passed')
   else

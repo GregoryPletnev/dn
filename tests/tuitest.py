@@ -126,7 +126,11 @@ class TuiSession:
         fcntl.ioctl(self.master, termios.TIOCSWINSZ,
                     struct.pack('HHHH', rows, cols, 0, 0))
         child_env = os.environ.copy()
-        child_env.update({'TERM': 'xterm-256color', 'LC_ALL': 'en_US.UTF-8'})
+        child_env.update({'TERM': 'xterm-256color', 'LC_ALL': 'en_US.UTF-8',
+                          # bin/dn is never on the test PATH; keep the
+                          # one-time hint (and its options write) out of
+                          # every TUI test but its own
+                          'DN_NO_PATH_HINT': '1'})
         child_env.update(env or {})
         self.proc = subprocess.Popen(
             argv, stdin=slave, stdout=slave, stderr=slave,

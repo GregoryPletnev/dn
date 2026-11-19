@@ -44,6 +44,7 @@ type
     PlayerEqBands: array[0..9] of Integer;  // last equalizer gains, dB
     LocalSendPort: Integer;     // LocalSend receive port, 0 = receive off
     LocalSendName: AnsiString;  // device name peers see
+    PathHintShown: Boolean;     // the "not in PATH" hint was shown once
   end;
 
 const
@@ -77,7 +78,8 @@ var
     PlayerEqPreset: 'Flat';
     PlayerEqBands: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     LocalSendPort: 0;
-    LocalSendName: 'DN'
+    LocalSendName: 'DN';
+    PathHintShown: False
   );
 
 procedure OptLoad;
@@ -151,6 +153,7 @@ begin
     if (p >= 0) and (p <= 65535) then Opt.LocalSendPort := p;
     if L.Values['localsend_name'] <> '' then
       Opt.LocalSendName := L.Values['localsend_name'];
+    Opt.PathHintShown := AsBool(L.Values['path_hint_shown'], Opt.PathHintShown);
     for i := 1 to HlGroupCount do
     begin
       k := 'hl' + IntToStr(i);
@@ -193,6 +196,7 @@ begin
             IntToStr(Opt.PlayerEqBands[i]));
     L.Add('localsend_port=' + IntToStr(Opt.LocalSendPort));
     L.Add('localsend_name=' + Opt.LocalSendName);
+    L.Add('path_hint_shown=' + BoolStr(Opt.PathHintShown));
     for i := 1 to HlGroupCount do
     begin
       k := 'hl' + IntToStr(i);
