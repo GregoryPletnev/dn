@@ -416,7 +416,7 @@ type
 
 const
   { xterm sequences in both CSI (\E[..) and SS3 (\EO..) forms }
-  KeySeqs: array[0..29] of TKeySeq = (
+  KeySeqs: array[0..30] of TKeySeq = (
     (Seq: 'OA'; Key: KEY_UP),
     (Seq: 'OB'; Key: KEY_DOWN),
     (Seq: 'OC'; Key: KEY_RIGHT),
@@ -442,6 +442,7 @@ const
     (Seq: '[1;2A'; Key: KEY_SR),
     (Seq: '[1;2B'; Key: KEY_SF),
     (Seq: '[15;5~'; Key: KEY_F0 + 29),   // Ctrl-F5: move/resize a window
+    (Seq: '[18;3~'; Key: KEY_F0 + 7 + 1000),  // Alt-F7: find file
     (Seq: '[19;3~'; Key: KEY_F0 + 8 + 1000),  // Alt-F8: stop playback
     (Seq: 'OP'; Key: KEY_F0 + 1),
     (Seq: 'OQ'; Key: KEY_F0 + 2),

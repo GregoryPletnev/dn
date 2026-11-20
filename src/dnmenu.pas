@@ -47,6 +47,7 @@ const
   cmBrowser      = 36;
   cmDisks        = 37;
   cmDatabases    = 38;
+  cmFindFile     = 39;
 
 procedure DrawBar(sel: Integer);
 { Modal menu loop; startSel = menu index to open (0-based), returns cm*. }
@@ -118,6 +119,7 @@ begin
   AddItem('Disks...', 'Ctrl-D', cmDisks);
   AddMenu('Commands');
   AddItem('User menu', 'F2', cmUserMenu);
+  AddItem('Find file...', 'Alt-F7', cmFindFile);
   AddItem('Re-read panels', 'Ctrl-R', cmRereadAll);
   AddItem('UU-encode file', 'Ctrl-F7', cmUUEncode);
   AddItem('UU-decode file', 'Ctrl-F8', cmUUDecode);

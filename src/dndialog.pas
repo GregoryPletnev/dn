@@ -45,6 +45,34 @@ function KeyListDialog(const Title, Hint: AnsiString; Items: TStrings;
                        const Keys: array of LongInt; var Cur: Integer;
                        out Key: LongInt): Boolean;
 
+type
+  TFormKind = (fkText, fkChoice, fkCheck);
+  TFormField = record
+    Caption: AnsiString;
+    Kind: TFormKind;
+    Value: AnsiString;           // fkText
+    Options: array of AnsiString; // fkChoice
+    Index: Integer;              // fkChoice: the chosen option
+    Checked: Boolean;            // fkCheck
+    { fkChoice with Levels (one per option, 0 = top): a drop-down tree that
+      Enter/Space/a click opens; Left/Right still step through the options }
+    Levels: array of Integer;
+  end;
+
+{ A drop-down tree under (AY, AX), AW wide: Labels with their depth in
+  Levels (an item followed by deeper ones is a branch). Up/Down move,
+  Right/+ unfold, Left/- fold (on a child: fold its parent), Enter/Space
+  pick, a letter jumps, Esc cancels. The branch holding Index starts
+  unfolded. Returns True with Index set on a pick. }
+function TreeDropDown(AY, AX, AW: Integer; const Labels: array of AnsiString;
+                      const Levels: array of Integer; var Index: Integer): Boolean;
+
+{ A form of several fields. Tab/Down and Shift-Tab/Up move between the
+  fields and the buttons; a choice cycles with Left/Right/Space, a check
+  box toggles with Space; typing edits a text field (Backspace, Ctrl-U
+  clears). Enter accepts (on Cancel: cancels), Esc cancels. }
+function FormDialog(const Title: AnsiString; var Fields: array of TFormField): Boolean;
+
 { Draw a message box and return at once (no key wait): the screen shows
   it while the caller does blocking work; the next redraw removes it. }
 procedure InfoBox(const Title, Msg: AnsiString);
@@ -665,6 +693,377 @@ begin
           Exit(True);
         end;
       end;
+    end;
+  until False;
+end;
+
+function TreeDropDown(AY, AX, AW: Integer; const Labels: array of AnsiString;
+                      const Levels: array of Integer; var Index: Integer): Boolean;
+var
+  open: array of Boolean;        // per item: a parent row that shows its children
+  vis: array of Integer;         // the visible rows -> item index
+  cur, top, rows, h, y, x, w, ch, i, k, maxRows: Integer;
+  below: Boolean;
+  me: MEVENT;
+
+  function HasKids(i2: Integer): Boolean;
+  begin
+    Result := (i2 < High(Labels)) and (Levels[i2 + 1] > Levels[i2]);
+  end;
+
+  function ParentOf(i2: Integer): Integer;
+  begin
+    Result := i2 - 1;
+    while (Result >= 0) and (Levels[Result] >= Levels[i2]) do Dec(Result);
+  end;
+
+  procedure Rebuild;
+  var
+    j, hide: Integer;
+  begin
+    SetLength(vis, 0);
+    hide := MaxInt;                  // children deeper than this are folded
+    for j := 0 to High(Labels) do
+    begin
+      if Levels[j] > hide then Continue;
+      hide := MaxInt;
+      SetLength(vis, Length(vis) + 1);
+      vis[High(vis)] := j;
+      if HasKids(j) and not open[j] then hide := Levels[j];
+    end;
+  end;
+
+  function VisPos(item: Integer): Integer;
+  var
+    j: Integer;
+  begin
+    for j := 0 to High(vis) do
+      if vis[j] = item then Exit(j);
+    Result := 0;
+  end;
+
+  procedure Draw;
+  var
+    j, it, pair: Integer;
+    s, mark: AnsiString;
+  begin
+    DrawBox(y, x, h, w, '');
+    for j := 0 to rows - 1 do
+    begin
+      if top + j > High(vis) then
+      begin
+        PutStr(y + 1 + j, x + 1, StringOfChar(' ', w - 2), cpMenuBar);
+        Continue;
+      end;
+      it := vis[top + j];
+      if HasKids(it) then
+      begin
+        if open[it] then mark := '▾ ' else mark := '▸ ';
+      end
+      else
+        mark := '  ';
+      s := StringOfChar(' ', Levels[it] * 2) + mark + Labels[it];
+      if top + j = cur then pair := cpMenuSel else pair := cpMenuBar;
+      PutStr(y + 1 + j, x + 1, Utf8PadRight(s, w - 2), pair);
+    end;
+    refresh;
+  end;
+
+  procedure Fit;
+  var
+    want: Integer;
+  begin
+    want := Length(vis);
+    if want > maxRows then want := maxRows;
+    if want > rows then rows := want;        // grow, never shrink
+    h := rows + 2;
+    if below then y := AY else y := AY - 1 - h;
+    if y < 0 then y := 0;
+  end;
+
+  procedure Jump(c: Char);
+  var
+    j, it: Integer;
+  begin
+    for j := 1 to Length(vis) do
+    begin
+      it := vis[(cur + j) mod Length(vis)];
+      if (Labels[it] <> '') and (UpCase(Labels[it][1]) = UpCase(c)) then
+      begin
+        cur := (cur + j) mod Length(vis);
+        Exit;
+      end;
+    end;
+  end;
+
+begin
+  Result := False;
+  if Length(Labels) = 0 then Exit;
+  SetLength(open, Length(Labels));
+  { open the branch that holds the current choice }
+  for i := 0 to High(open) do open[i] := False;
+  if (Index >= 0) and (Index <= High(Labels)) then
+  begin
+    k := ParentOf(Index);
+    while k >= 0 do
+    begin
+      open[k] := True;
+      k := ParentOf(k);
+    end;
+  end;
+  Rebuild;
+  cur := VisPos(Index);
+  w := AW;
+  if w > COLS - 2 then w := COLS - 2;
+  if w < 20 then w := 20;
+  x := AX;
+  if x + w > COLS then x := COLS - w;
+  if x < 0 then x := 0;
+  { under the field (AY) when 6 rows fit there, else above it; maxRows is
+    the room, rows starts at what is visible and only grows (unfolding) }
+  below := LINES - 1 - AY - 2 >= 6;
+  if below then maxRows := LINES - 1 - AY - 2 else maxRows := AY - 1 - 2;
+  if maxRows > 16 then maxRows := 16;
+  if maxRows < 3 then maxRows := 3;
+  rows := 0;
+  Fit;
+  top := 0;
+  repeat
+    if cur > High(vis) then cur := High(vis);
+    if cur < 0 then cur := 0;
+    if cur < top then top := cur;
+    if cur >= top + rows then top := cur - rows + 1;
+    if top > Length(vis) - rows then top := Length(vis) - rows;
+    if top < 0 then top := 0;
+    Draw;
+    ch := getch;
+    case ch of
+      ERR: ;
+      27: Exit(False);
+      KEY_UP: if cur > 0 then Dec(cur);
+      KEY_DOWN: if cur < High(vis) then Inc(cur);
+      KEY_PPAGE: Dec(cur, rows);
+      KEY_NPAGE: Inc(cur, rows);
+      KEY_HOME: cur := 0;
+      KEY_END: cur := High(vis);
+      KEY_RIGHT, Ord('+'):
+        if HasKids(vis[cur]) and not open[vis[cur]] then
+        begin
+          k := vis[cur];
+          open[k] := True;
+          Rebuild;
+          Fit;
+          cur := VisPos(k);
+        end;
+      KEY_LEFT, Ord('-'):
+        begin
+          k := vis[cur];
+          if HasKids(k) and open[k] then open[k] := False
+          else if ParentOf(k) >= 0 then
+          begin
+            k := ParentOf(k);       // on a child: fold its parent, stand on it
+            open[k] := False;
+          end;
+          Rebuild;
+          cur := VisPos(k);
+        end;
+      10, 13, KEY_ENTER, 32:
+        begin
+          Index := vis[cur];
+          Exit(True);
+        end;
+      KEY_MOUSE:
+        if (getmouse(@me) = OK) and
+           ((me.bstate and (mbtn1Clicked or mbtn1Pressed or mbtn1Double)) <> 0) then
+        begin
+          if (me.y > y) and (me.y < y + h - 1) and (me.x > x) and (me.x < x + w - 1) and
+             (top + me.y - y - 1 <= High(vis)) then
+          begin
+            cur := top + me.y - y - 1;
+            k := vis[cur];
+            { a click on the ▸/▾ mark folds, elsewhere it picks }
+            if HasKids(k) and (me.x - x - 1 <= Levels[k] * 2 + 1) then
+            begin
+              open[k] := not open[k];
+              Rebuild;
+              Fit;
+              cur := VisPos(k);
+            end
+            else
+            begin
+              Index := k;
+              Exit(True);
+            end;
+          end
+          else
+            Exit(False);
+        end;
+    else
+      if (ch >= 32) and (ch < 127) then Jump(Chr(ch));
+    end;
+  until False;
+end;
+
+function FormDialog(const Title: AnsiString; var Fields: array of TFormField): Boolean;
+var
+  w, h, y, x, i, cur, ch, lw, fw, n: Integer;
+  me: MEVENT;
+  okX, cancelX, by: Integer;
+  u: AnsiString;
+
+  function IsDrop(j: Integer): Boolean;
+  begin
+    Result := (Fields[j].Kind = fkChoice) and (Length(Fields[j].Levels) > 0) and
+              (Length(Fields[j].Levels) = Length(Fields[j].Options));
+  end;
+
+  procedure Draw;
+  var
+    j, fy: Integer;
+    v, caretCell: AnsiString;
+    pair: Integer;
+  begin
+    Base;
+    DrawBox(y, x, h, w, Title);
+    for j := 0 to High(Fields) do
+    begin
+      fy := y + 1 + j;
+      PutStr(fy, x + 2, Utf8PadRight(Fields[j].Caption, lw), cpMenuBar);
+      case Fields[j].Kind of
+        fkText:
+          begin
+            v := Fields[j].Value;
+            { show the tail when the text is wider than the field }
+            if Utf8Width(v) > fw - 1 then
+              v := Utf8Copy(v, Utf8Len(v) - (fw - 2) + 1, fw - 1);
+            PutStr(fy, x + 2 + lw, Utf8PadRight(v, fw), cpInput);
+            if j = cur then
+            begin
+              caretCell := ' ';
+              PutStr(fy, x + 2 + lw + Utf8Width(v), caretCell, cpFKeyNum);
+            end;
+          end;
+        fkChoice:
+          begin
+            v := '';
+            if (Fields[j].Index >= 0) and (Fields[j].Index <= High(Fields[j].Options)) then
+              v := Fields[j].Options[Fields[j].Index];
+            if j = cur then pair := cpMenuSel else pair := cpInput;
+            if IsDrop(j) then
+              PutStr(fy, x + 2 + lw, Utf8PadRight(' ' + v, fw - 2) + '▾ ', pair)
+            else
+              PutStr(fy, x + 2 + lw, Utf8PadRight('< ' + v + ' >', fw), pair);
+          end;
+        fkCheck:
+          begin
+            if Fields[j].Checked then v := '[x]' else v := '[ ]';
+            if j = cur then pair := cpMenuSel else pair := cpMenuBar;
+            PutStr(fy, x + 2 + lw, v, pair);
+            PutStr(fy, x + 5 + lw, StringOfChar(' ', fw - 3), cpMenuBar);
+          end;
+      end;
+    end;
+    if cur = n then PutStr(by, okX, '[ OK ]', cpMenuSel)
+    else PutStr(by, okX, '[ OK ]', cpMenuBar);
+    if cur = n + 1 then PutStr(by, cancelX, '[ Cancel ]', cpMenuSel)
+    else PutStr(by, cancelX, '[ Cancel ]', cpMenuBar);
+    refresh;
+  end;
+
+  procedure DropDown(j: Integer);
+  var
+    k: Integer;
+  begin
+    k := Fields[j].Index;
+    if TreeDropDown(y + 2 + j, x + 2 + lw, fw, Fields[j].Options, Fields[j].Levels, k) then
+      Fields[j].Index := k;
+  end;
+
+  procedure Cycle(d: Integer);
+  var
+    k: Integer;
+  begin
+    case Fields[cur].Kind of
+      fkChoice:
+        begin
+          k := Length(Fields[cur].Options);
+          if k > 0 then
+            Fields[cur].Index := (Fields[cur].Index + d + k) mod k;
+        end;
+      fkCheck: Fields[cur].Checked := not Fields[cur].Checked;
+    end;
+  end;
+
+begin
+  Result := False;
+  n := Length(Fields);
+  lw := 0;
+  for i := 0 to n - 1 do
+    if Utf8Width(Fields[i].Caption) + 1 > lw then lw := Utf8Width(Fields[i].Caption) + 1;
+  w := 72;
+  if w > COLS - 4 then w := COLS - 4;
+  fw := w - 4 - lw;
+  h := n + 4;
+  y := (LINES - h) div 2;
+  x := (COLS - w) div 2;
+  by := y + h - 2;
+  okX := x + w div 2 - 10;
+  cancelX := okX + 9;
+  cur := 0;
+  repeat
+    Draw;
+    ch := getch;
+    case ch of
+      ERR: ;
+      27: Exit(False);
+      9, KEY_DOWN: cur := (cur + 1) mod (n + 2);
+      KEY_BTAB, KEY_UP: cur := (cur + n + 1) mod (n + 2);
+      10, 13, KEY_ENTER:
+        begin
+          if (cur < n) and IsDrop(cur) then
+            DropDown(cur)                 // Enter on a drop-down opens it
+          else
+          begin
+            if cur = n + 1 then Exit(False);
+            Exit(True);
+          end;
+        end;
+      KEY_LEFT: if (cur < n) and (Fields[cur].Kind = fkChoice) then Cycle(-1);
+      KEY_RIGHT: if (cur < n) and (Fields[cur].Kind = fkChoice) then Cycle(1);
+      KEY_BACKSPACE, 127, 8:
+        if (cur < n) and (Fields[cur].Kind = fkText) and (Fields[cur].Value <> '') then
+        begin
+          u := Fields[cur].Value;
+          while (u <> '') and ((Ord(u[Length(u)]) and $C0) = $80) do
+            SetLength(u, Length(u) - 1);
+          SetLength(u, Length(u) - 1);
+          Fields[cur].Value := u;
+        end;
+      21:                                 // Ctrl-U: clear the field
+        if (cur < n) and (Fields[cur].Kind = fkText) then Fields[cur].Value := '';
+      KEY_MOUSE:
+        if (getmouse(@me) = OK) and
+           ((me.bstate and (mbtn1Clicked or mbtn1Pressed)) <> 0) then
+        begin
+          if (me.y >= y + 1) and (me.y < y + 1 + n) then
+          begin
+            cur := me.y - y - 1;
+            if IsDrop(cur) and (me.x >= x + 2 + lw) then DropDown(cur)
+            else if (Fields[cur].Kind <> fkText) and (me.x >= x + 2 + lw) then Cycle(1);
+          end
+          else if me.y = by then
+          begin
+            if (me.x >= okX) and (me.x < okX + 6) then Exit(True);
+            if (me.x >= cancelX) and (me.x < cancelX + 10) then Exit(False);
+          end;
+        end;
+    else
+      if (cur < n) and (ch = 32) and IsDrop(cur) then
+        DropDown(cur)
+      else if (cur < n) and (ch = 32) and (Fields[cur].Kind <> fkText) then
+        Cycle(1)
+      else if (cur < n) and (Fields[cur].Kind = fkText) and (ch >= 32) and (ch < 256) then
+        Fields[cur].Value := Fields[cur].Value + Chr(ch);
     end;
   until False;
 end;

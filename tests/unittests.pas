@@ -7,7 +7,7 @@ program unittests;
 uses
   BaseUnix, SysUtils, Classes, dnscreen, dnpanel, dnfileops, dnuu, dnvfs, dnsftp,
   dnsession, dnusermenu, dnhighlite, dnplaylist, dnaudio, dnlsproto,
-  dnhtml, dncss, dnhttp, dnlayout, dnpath, dnsha256, dnlsident, process, dncrypto, dnvault, dndb;
+  dnhtml, dncss, dnhttp, dnlayout, dnpath, dnsha256, dnlsident, process, dncrypto, dnvault, dndb, dnfind, dnmagic;
 
 var
   Failures: Integer = 0;
@@ -989,6 +989,138 @@ begin
   CheckEq(Utf8Sanitize(#$C0#$AF), '··', 'sanitize overlong');
   CheckEq(Utf8Sanitize('ok 漢'#9'x'), 'ok 漢'#9'x', 'sanitize keeps text');
   CheckEq(Utf8Sanitize('a'#$7F#1), 'a··', 'sanitize DEL and C0');
+end;
+
+procedure WriteBytes(const Path, Data: AnsiString);
+var
+  fs: TFileStream;
+begin
+  fs := TFileStream.Create(Path, fmCreate);
+  try
+    if Data <> '' then fs.WriteBuffer(Data[1], Length(Data));
+  finally
+    fs.Free;
+  end;
+end;
+
+function HitNames(const Root: AnsiString; const H: TFindHits): AnsiString;
+var
+  i: Integer;
+  L: TStringList;
+begin
+  L := TStringList.Create;
+  try
+    for i := 0 to High(H) do
+      L.Add(Copy(H[i].Path, Length(Root) + 2, MaxInt));
+    L.Sort;
+    L.Delimiter := ' ';
+    Result := L.DelimitedText;
+  finally
+    L.Free;
+  end;
+end;
+
+procedure TestFind;
+var
+  b, root, err, tar, pe: AnsiString;
+  n: Int64;
+  d: TDateTime;
+  o: TFindOptions;
+  hits: TFindHits;
+begin
+  { parsing }
+  Check(ParseHex('53 51 4c', b) and (b = 'SQL'), 'hex with spaces');
+  Check(ParseHex('7f454C46', b) and (b = #$7F'ELF'), 'hex packed');
+  Check(not ParseHex('5', b), 'hex odd length');
+  Check(not ParseHex('zz', b), 'hex not hex');
+  Check(ParseSize('10K', n) and (n = 10240), 'size K');
+  Check(ParseSize('2m', n) and (n = 2 * 1024 * 1024), 'size m');
+  Check(ParseSize('', n) and (n = -1), 'size empty');
+  Check(not ParseSize('ten', n), 'size bad');
+  Check(ParseDay('2026-11-20', d) and (FormatDateTime('yyyy-mm-dd', d) = '2026-11-20'),
+        'day iso');
+  Check(ParseDay('20.11.2026', d) and (FormatDateTime('yyyy-mm-dd', d) = '2026-11-20'),
+        'day dotted');
+  Check(not ParseDay('2026-13-01', d), 'day bad month');
+
+  { signatures }
+  CheckEq(DetectMagicHead('SQLite format 3'#0'xxxx'), 'SQLite', 'magic sqlite');
+  CheckEq(DetectMagicHead(#$89'PNG'#13#10#$1A#10#0#0), 'PNG', 'magic png');
+  CheckEq(DetectMagicHead('PK'#3#4'zz'), 'ZIP', 'magic zip');
+  CheckEq(DetectMagicHead('%PDF-1.7'), 'PDF', 'magic pdf');
+  CheckEq(DetectMagicHead(#$CA#$FE#$BA#$BE#0#0#0#2), 'Mach-O universal', 'magic fat');
+  CheckEq(DetectMagicHead(#$CA#$FE#$BA#$BE#0#0#0#$34), 'Java class', 'magic class');
+  tar := StringOfChar(#0, 257) + 'ustar' + StringOfChar(#0, 10);
+  CheckEq(DetectMagicHead(tar), 'tar', 'magic tar at 257');
+  pe := 'MZ' + StringOfChar(#0, $3A) + #$80#0#0#0 + StringOfChar(#0, $40) + 'PE'#0#0;
+  CheckEq(DetectMagicHead(pe), 'Windows PE', 'magic pe');
+  CheckEq(DetectMagicHead('MZ just text that starts with MZ'), '', 'magic MZ text');
+  CheckEq(DetectMagicHead('hello'), '', 'magic none');
+
+  { a tree }
+  root := GetTempDir + 'dn-find-' + IntToStr(GetProcessID);
+  ForceDirectories(root + '/sub/deeper');
+  ForceDirectories(root + '/.hidden');
+  WriteBytes(root + '/a.txt', 'one needle here');
+  WriteBytes(root + '/b.txt', 'nothing');
+  WriteBytes(root + '/sub/c.md', 'Needles everywhere');
+  { ' needle' crosses the 64 KiB read boundary }
+  WriteBytes(root + '/sub/deeper/d.txt', StringOfChar('x', 65532) + ' needle');
+  WriteBytes(root + '/sub/data.bin', 'SQLite format 3'#0 + StringOfChar(#0, 100));
+  WriteBytes(root + '/.hidden/e.txt', 'needle');
+  WriteBytes(root + '/big.log', StringOfChar('y', 20000));
+
+  o.Masks := '*'; o.Text := ''; o.Hex := ''; o.TypeFilter := '';
+  o.Advanced := False; o.Recursive := True; o.CaseSensitive := False;
+  o.WholeWords := False; o.Hidden := False; o.Scope := fsCurrent;
+  o.DateAfter := ''; o.DateBefore := ''; o.SizeGreater := ''; o.SizeLess := '';
+  o.OnlyReadOnly := False; o.OnlyExecutable := False;
+
+  o.Masks := '*.txt';
+  Check(FindFiles(o, [root], hits, err), 'find by mask');
+  CheckEq(HitNames(root, hits), 'a.txt b.txt sub/deeper/d.txt', 'find mask results');
+  o.Masks := '*'; o.Text := 'needle';
+  FindFiles(o, [root], hits, err);
+  CheckEq(HitNames(root, hits), 'a.txt sub/c.md sub/deeper/d.txt',
+          'find text (case-insensitive, across a chunk edge)');
+  o.CaseSensitive := True;
+  FindFiles(o, [root], hits, err);
+  CheckEq(HitNames(root, hits), 'a.txt sub/deeper/d.txt', 'find text case-sensitive');
+  o.CaseSensitive := False; o.WholeWords := True;
+  FindFiles(o, [root], hits, err);
+  CheckEq(HitNames(root, hits), 'a.txt sub/deeper/d.txt', 'find whole words');
+  o.WholeWords := False; o.Hidden := True;
+  FindFiles(o, [root], hits, err);
+  Check(Pos('.hidden/e.txt', HitNames(root, hits)) > 0, 'find hidden');
+  o.Hidden := False; o.Recursive := False;
+  FindFiles(o, [root], hits, err);
+  CheckEq(HitNames(root, hits), 'a.txt', 'find not recursive');
+  o.Recursive := True; o.Text := ''; o.Hex := '53 51 4C 69 74 65';
+  FindFiles(o, [root], hits, err);
+  CheckEq(HitNames(root, hits), 'sub/data.bin', 'find hex');
+  o.Hex := ''; o.TypeFilter := 'SQLite';
+  FindFiles(o, [root], hits, err);
+  CheckEq(HitNames(root, hits), 'sub/data.bin', 'find by signature');
+  o.TypeFilter := 'Databases';
+  FindFiles(o, [root], hits, err);
+  CheckEq(HitNames(root, hits), 'sub/data.bin', 'find by signature group');
+  o.TypeFilter := ''; o.Masks := 'sub*';
+  FindFiles(o, [root], hits, err);
+  CheckEq(HitNames(root, hits), 'sub', 'find a directory by name');
+  o.Masks := '*'; o.Advanced := True; o.SizeGreater := '19K';
+  FindFiles(o, [root], hits, err);
+  CheckEq(HitNames(root, hits), 'big.log sub/deeper/d.txt', 'find size greater');
+  o.SizeGreater := ''; o.DateAfter := '2000-01-01'; o.DateBefore := '1999-01-01';
+  FindFiles(o, [root], hits, err);
+  CheckEq(IntToStr(Length(hits)), '0', 'find date window');
+  o.DateAfter := 'yesterday';
+  Check(not FindFiles(o, [root], hits, err) or (err <> ''), 'find bad date');
+  Check(Pos('bad date', err) > 0, 'find bad date message');
+  { a file as a root (the Selected scope) }
+  o.Advanced := False; o.DateAfter := ''; o.DateBefore := ''; o.Text := 'needle';
+  FindFiles(o, [root + '/a.txt', root + '/b.txt'], hits, err);
+  CheckEq(IntToStr(Length(hits)), '1', 'find in selected files');
+  DeleteTree(root, err);
 end;
 
 procedure TestCrypto;
@@ -2511,6 +2643,7 @@ begin
   TestVault;
   TestDb;
   TestWidth;
+  TestFind;
   TestLsIdentity;
   TestHtmlTokenizer;
   TestHtmlTree;

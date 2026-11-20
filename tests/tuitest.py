@@ -106,6 +106,8 @@ KEYS = {
     'CTRL_T': '\x14',
     'CTRL_Q': '\x11',
     'INS': '\x1b[2~',
+    'ALT_F7': '\x1b[18;3~',
+    'CTRL_U': '\x15',
     'CTRL_E': '\x05',
     'CTRL_F': '\x06',
     'CTRL_L': '\x0c',

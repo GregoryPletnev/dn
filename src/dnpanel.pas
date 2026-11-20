@@ -214,7 +214,9 @@ end;
 
 function TPanel.DisplayPath: AnsiString;
 begin
-  if Vfs.IsLocal then
+  { the plain file system shows its path; every other VFS (a local one
+    such as the find results included) names itself }
+  if Vfs = TVFS(LocalVFS) then
     Result := Path
   else
     Result := Vfs.Display(Path);
@@ -478,7 +480,7 @@ var
   prev, ldir, lcur: AnsiString;
   i, p: Integer;
 begin
-  if (Path = '') or (Path = '/') then
+  if Vfs.IsRootPath(Path) then
   begin
     { at the VFS root: leave the VFS (archive -> its local directory) }
     if Vfs.ParentExit(ldir, lcur) then

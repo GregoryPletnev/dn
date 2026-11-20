@@ -173,6 +173,23 @@ Panels browse more than the local disk (ROADMAP M3):
 - **File list panel** (Ctrl+W, DN 2.12): read a text file of paths into a
   virtual listing.
 
+## Find file
+
+Alt-F7 (Commands → Find file…) is DN's Find File dialog, as DN 1.51 and
+DN OSP / Necromancer's DN had it: file mask (`*.txt;*.md`), text to find,
+hex string (`53 51 4c`), options (advanced search, recursive, case
+sensitive, whole words, hidden files) and scope (current directory,
+selected, home, entire disk). dn adds **File type (content)**: a type
+told by the file's signature — SQLite, PDF, PNG, ZIP, ELF, Mach-O, … — or
+a whole group (Images, Archives, Executables, Audio & video, Documents,
+Databases), whatever the file is called. Advanced search adds date
+after/before, size greater/less (`10K`, `2M`), read-only, executable.
+
+As in DN, the results fill the panel: each hit by its path from where the
+search started. View, edit, copy, move and delete act on the real files;
+Enter goes to a hit in its own directory; `..` returns. Esc during the
+search asks whether to stop and keeps what was found.
+
 ## Databases
 
 Disk → Databases… (Ctrl-Q) manages connections to PostgreSQL, ClickHouse

@@ -40,6 +40,8 @@ type
     { display form of an inner path (panel title, command line) }
     function Display(const Path: AnsiString): AnsiString; virtual;
     function IsLocal: Boolean; virtual;
+    { the top of this VFS: '..' there leaves it (ParentExit) }
+    function IsRootPath(const Path: AnsiString): Boolean; virtual;
     { leaving the VFS root upwards: where to land in the local world.
       False = the root is the top (stay). }
     function ParentExit(out LocalDir, CursorName: AnsiString): Boolean; virtual;
@@ -578,6 +580,11 @@ end;
 function TVFS.IsLocal: Boolean;
 begin
   Result := False;
+end;
+
+function TVFS.IsRootPath(const Path: AnsiString): Boolean;
+begin
+  Result := (Path = '') or (Path = '/');
 end;
 
 function TVFS.ParentExit(out LocalDir, CursorName: AnsiString): Boolean;

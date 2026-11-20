@@ -11,7 +11,7 @@ uses
   dnwin, dnview, dnedit, dnconfig, dnoptions, dnvfs, dnarcvfs, dnmount,
   dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver, dnconsole, dngpm,
   dnplaylist, dnplayer, dnlsproto, dnls, dnlsdisc, dnlsident, dnpath,
-  dndb, dndbvfs, dngrid, dndbui, dnvault,
+  dndb, dndbvfs, dngrid, dndbui, dnvault, dnfind,
   dndisks, dndisksui,
   dnhttp, dnhtml, dncss, dnlayout, dnjs, dnbrowser;
 
@@ -902,6 +902,104 @@ begin
     FocusWin := OpenSqlWindow(v.Conn, '');
 end;
 
+var
+  LastFind: TFindOptions = (Masks: '*'; Text: ''; Hex: ''; TypeFilter: '';
+    Advanced: False; Recursive: True; CaseSensitive: False; WholeWords: False;
+    Hidden: False; Scope: fsCurrent; DateAfter: ''; DateBefore: '';
+    SizeGreater: ''; SizeLess: ''; OnlyReadOnly: False; OnlyExecutable: False);
+
+{ Find File (Alt-F7): the DN dialog, then the hits in the active panel }
+procedure DoFindFile;
+var
+  roots: array of AnsiString;
+  root, err: AnsiString;
+  hits: TFindHits;
+  i: Integer;
+  done: Boolean;
+begin
+  if not FindDialog(LastFind) then Exit;
+  { the panel's own directory; a search from the results searches their root }
+  if ActiveP.Vfs is TFindVFS then root := TFindVFS(ActiveP.Vfs).Root
+  else if ActiveP.Vfs.IsLocal then root := ActiveP.Path
+  else root := GetCurrentDir;
+  SetLength(roots, 0);
+  case LastFind.Scope of
+    fsCurrent:
+      begin
+        SetLength(roots, 1);
+        roots[0] := root;
+      end;
+    fsSelected:
+      begin
+        if ActiveP.Vfs.IsLocal then
+          for i := 0 to High(ActiveP.Files) do
+            if ActiveP.Files[i].Sel then
+            begin
+              SetLength(roots, Length(roots) + 1);
+              roots[High(roots)] := VfsJoin(ActiveP.Path, ActiveP.Files[i].Name);
+            end;
+        { nothing selected: the item under the cursor, as DN did }
+        if (Length(roots) = 0) and ActiveP.Vfs.IsLocal and
+           (ActiveP.CurFile.Name <> '') and (ActiveP.CurFile.Name <> '..') then
+        begin
+          SetLength(roots, 1);
+          roots[0] := VfsJoin(ActiveP.Path, ActiveP.CurFile.Name);
+        end;
+        if Length(roots) = 0 then
+        begin
+          MsgBox('Find file', 'Nothing is selected.', ['OK']);
+          Exit;
+        end;
+      end;
+    fsHome:
+      begin
+        root := ExcludeTrailingPathDelimiter(GetUserDir);
+        SetLength(roots, 1);
+        roots[0] := root;
+      end;
+    fsDisk:
+      begin
+        root := '/';
+        SetLength(roots, 1);
+        roots[0] := root;
+      end;
+  end;
+  done := FindFiles(LastFind, roots, hits, err);
+  if err <> '' then
+  begin
+    MsgBox('Find file', err, ['OK']);
+    Exit;
+  end;
+  if Length(hits) = 0 then
+  begin
+    if done then MsgBox('Find file', 'No files found.', ['OK']);
+    Exit;
+  end;
+  ActiveP.SetVfs(TFindVFS.CreateFind(root, FindTitle(LastFind), hits), root);
+end;
+
+{ Enter in the find results: a directory opens for real, a file is shown
+  in its own directory with the cursor on it }
+procedure FindResultEnter;
+var
+  full: AnsiString;
+  i: Integer;
+begin
+  full := TFindVFS(ActiveP.Vfs).FullPath(ActiveP.CurFile.Name);
+  if ActiveP.CurFile.IsDir then
+  begin
+    ActiveP.SetVfs(LocalVFS, full);
+    Exit;
+  end;
+  ActiveP.SetVfs(LocalVFS, ExtractFileDir(full));
+  for i := 0 to High(ActiveP.Files) do
+    if ActiveP.Files[i].Name = ExtractFileName(full) then
+    begin
+      ActiveP.Cur := i;
+      Break;
+    end;
+end;
+
 procedure EnterOrLaunch;
 var
   av: TArchiveVFS;
@@ -909,6 +1007,12 @@ var
   items: TVfsItems;
   err, full: AnsiString;
 begin
+  if (ActiveP.Vfs is TFindVFS) and (ActiveP.CurFile.Name <> '') and
+     (ActiveP.CurFile.Name <> '..') then
+  begin
+    FindResultEnter;
+    Exit;
+  end;
   if ActiveP.CurFile.IsDir then
   begin
     ActiveP.EnterCurrent;
@@ -1474,6 +1578,7 @@ begin
     L.Add('  Ctrl-R           re-read both panels');
     L.Add('  Ctrl-T           Tetris');
     L.Add('  Ctrl-Q           Databases (PostgreSQL, ClickHouse, SQLite)');
+    L.Add('  Alt-F7           Find file (name, text, hex, type by content)');
     L.Add('  Alt-F8           stop the media player');
     L.Add('  F1               this help');
     L.Add('  F2               user menu (dn.mnu, see below)');
@@ -1778,6 +1883,7 @@ begin
     cmSftpConnect: DoSftpConnect;
     cmDisks: DoDisks;
     cmDatabases: DoDatabases;
+    cmFindFile: DoFindFile;
     cmUUEncode: DoUUEncode;
     cmUUDecode: DoUUDecode;
     cmPanelSetup: DoPanelSetup;
@@ -2167,6 +2273,11 @@ begin
   if ch = KEY_F0 + 8 + 1000 then
   begin
     StopPlayers;
+    Exit;
+  end;
+  if (ch = KEY_F0 + 7 + 1000) and (FocusWin = nil) then
+  begin
+    DoFindFile;                 // Alt-F7
     Exit;
   end;
   if MoveMode then
