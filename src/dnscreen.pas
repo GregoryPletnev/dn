@@ -72,6 +72,12 @@ var
 
 procedure ScrInit;
 procedure ScrDone;
+{ hand the terminal to a shell or a program (Ctrl-O, a command line run)
+  and take it back: besides endwin these switch the xterm mouse modes off
+  and on again, or the terminal keeps sending mouse reports instead of
+  selecting text }
+procedure ScrSuspend;
+procedure ScrResume;
 { ncurses getch/timeout, plus gpm mouse on the Linux console (dngpm).
   Units list dnscreen after ncurses, so these take precedence. }
 function getch: LongInt;
@@ -244,6 +250,18 @@ begin
   end;
 end;
 
+procedure MouseReportsOn;
+begin
+  Write(#27'[?1000h'#27'[?1002h'#27'[?1006h');
+  Flush(Output);
+end;
+
+procedure MouseReportsOff;
+begin
+  Write(#27'[?1006l'#27'[?1002l'#27'[?1000l');
+  Flush(Output);
+end;
+
 procedure ScrInit;
 begin
   EnsureUtf8Locale;
@@ -268,17 +286,31 @@ begin
     drag events. Must go out AFTER ncurses' refresh, or ncurses' own
     mouse-enable string would overwrite these modes. }
   refresh;
-  Write(#27'[?1000h'#27'[?1002h'#27'[?1006h');
-  Flush(Output);
+  MouseReportsOn;
   GpmInit;
 end;
 
 procedure ScrDone;
 begin
   GpmDone;
-  Write(#27'[?1006l'#27'[?1002l'#27'[?1000l');
-  Flush(Output);
+  MouseReportsOff;
   endwin;
+end;
+
+procedure ScrSuspend;
+begin
+  def_prog_mode;
+  GpmSuspend;
+  endwin;
+  MouseReportsOff;       // after endwin: nothing of ncurses' follows it
+end;
+
+procedure ScrResume;
+begin
+  reset_prog_mode;
+  GpmResume;
+  refresh;
+  MouseReportsOn;        // after refresh, as in ScrInit
 end;
 
 procedure timeout(delay: LongInt);

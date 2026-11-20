@@ -133,3 +133,23 @@ def test_console_cd_builtin_and_history(dn):
     dn.key('ESC')                         # empty input: closes the window
     dn.wait_gone('Console')
     assert dn.alive()
+
+
+def test_ctrl_o_hands_the_mouse_to_the_terminal(dn):
+    """On the user screen the terminal must select text with the mouse, so
+    dn switches its xterm mouse reports off there, and back on after."""
+    dn.pump(0.2)
+    start = len(dn.raw)
+    dn.send('\x0f')
+    dn.wait_text('Ctrl-O returns to DN')
+    out = dn.raw[start:]
+    assert b'\x1b[?1000l' in out and b'\x1b[?1002l' in out \
+        and b'\x1b[?1006l' in out, 'mouse reports left on'
+    back = len(dn.raw)
+    dn.send('\x0f')
+    dn.wait_text('Copy')
+    dn.pump(0.2)
+    assert b'\x1b[?1000h' in dn.raw[back:], 'mouse reports not restored'
+    dn.click_on('a.txt')                  # and the panels still take clicks
+    dn.wait_for(lambda s: 'a.txt' in s.cursor_bar_text(),
+                desc='click moved the cursor after Ctrl-O')

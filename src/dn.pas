@@ -471,9 +471,7 @@ procedure ShellExec(const cmd, dir: AnsiString; Pause: Boolean = False);
 var
   old: AnsiString;
 begin
-  def_prog_mode;
-  GpmSuspend;
-  endwin;
+  ScrSuspend;
   WriteLn;
   WriteLn(dir, '> ', cmd);
   Flush(Output);
@@ -492,9 +490,7 @@ begin
     WaitAnyKey;
     {$endif}
   end;
-  reset_prog_mode;
-  GpmResume;
-  refresh;
+  ScrResume;
   ReloadPanels;
 end;
 
@@ -616,9 +612,7 @@ begin
     Ctrl-O — or Esc on an empty line — returns to the panels }
   if ActiveP.Vfs.IsLocal then dir := ActiveP.Path else dir := GetCurrentDir;
   histAt := CmdHist.Count;
-  def_prog_mode;
-  GpmSuspend;
-  endwin;
+  ScrSuspend;
   WriteLn;
   WriteLn('-- Ctrl-O returns to DN --');
   ShellTtyRaw(saved);
@@ -661,9 +655,7 @@ begin
     end;
   until False;
   TCSetAttr(0, TCSANOW, saved);
-  reset_prog_mode;
-  GpmResume;
-  refresh;
+  ScrResume;
   ReloadPanels;
 end;
 {$else}
@@ -882,9 +874,7 @@ end;
 
 procedure RunSshInteractive(const cmd: AnsiString);
 begin
-  def_prog_mode;
-  GpmSuspend;
-  endwin;
+  ScrSuspend;
   WriteLn;
   {$ifdef unix}
   RunShell(cmd);
@@ -894,9 +884,7 @@ begin
   {$ifdef unix}
   WaitAnyKey;
   {$endif}
-  reset_prog_mode;
-  GpmResume;
-  refresh;
+  ScrResume;
 end;
 
 procedure DoSessions;
