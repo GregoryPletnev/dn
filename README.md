@@ -289,9 +289,10 @@ are wrong. `dnscreen.pas` defines correct v2 masks; don't use the binding's.
 ## Tetris
 
 Like the original DN (`original/Dos-Navigator/TETRIS.PAS`), a Tetris is
-built in: Tools → Tetris or Ctrl+T. Arrows move/rotate, Space drops,
-Q/Esc quits back to the panels. `DN_TETRIS_SEQ=IOTSZJL...` fixes the piece
-sequence (used by the tests).
+built in: Tools → Tetris or Ctrl+T. The game is a window: drag it by the
+title, leave it in the background (it pauses itself). Arrows move/rotate,
+Space drops, P pauses, N starts over after game over, Q/Esc closes it.
+`DN_TETRIS_SEQ=IOTSZJL...` fixes the piece sequence (used by the tests).
 
 ## Status
 

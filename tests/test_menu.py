@@ -24,6 +24,7 @@ def test_mouse_opens_tools_and_starts_tetris(dn):
     dn.wait_text('Tetris')
     dn.click_on('Tetris')
     dn.wait_text('TETRIS')              # game window title
+    dn.wait_gone('LocalSend')           # the Tools dropdown closed
     dn.send('q')
     dn.wait_gone('TETRIS')
     assert dn.alive()

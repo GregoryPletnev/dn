@@ -96,6 +96,37 @@ begin
     if Wins[i] is TPlayerWin then TPlayerWin(Wins[i]).Tick;
 end;
 
+{ True when a Tetris game is running (not paused, not over): the main
+  loop then wakes every TetrisTickMs for gravity. }
+function GameActive: Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  for i := 0 to WinCount - 1 do
+    if (Wins[i] is TTetrisWin) and TTetrisWin(Wins[i]).Running then
+      Exit(True);
+end;
+
+{ Gravity for every game window; one without the focus pauses itself. }
+procedure TickGames;
+var
+  i: Integer;
+begin
+  for i := 0 to WinCount - 1 do
+    if Wins[i] is TTetrisWin then
+      TTetrisWin(Wins[i]).Tick(Wins[i] = FocusWin);
+end;
+
+{ Tools > Tetris / Ctrl-T: open the game window, or focus the open one. }
+procedure DoTetris;
+var
+  w: TTetrisWin;
+begin
+  w := OpenTetris;
+  if w <> nil then FocusWin := w;
+end;
+
 { Stop and close every player window (Alt-F8, or on quit). }
 procedure StopPlayers;
 var
@@ -1526,7 +1557,7 @@ begin
     cmMkDir: DoMkDir;
     cmDelete: DoDelete;
     cmInvert: ActiveP.ToggleSelect;
-    cmTetris: RunTetris;
+    cmTetris: DoTetris;
     cmHelp: DoHelp;
     cmSortLeft: SortDialog(LeftP);
     cmSortRight: SortDialog(RightP);
@@ -1975,7 +2006,7 @@ begin
     15:        ShowUserScreen;                 // Ctrl+O
     23:        DoReadFileList;                 // Ctrl+W: read file list
     18:        ReloadPanels;                   // Ctrl+R
-    20:        RunTetris;                      // Ctrl+T
+    20:        DoTetris;                       // Ctrl+T
     2:         DoBrowser;                      // Ctrl+B: browser
   else
     if (ch >= KEY_F0 + 1) and (ch <= KEY_F0 + 10) then
@@ -2107,7 +2138,8 @@ var
   ch: LongInt;
   startL, startR: AnsiString;
   idleSecs, saverLimit: Integer;
-  lastTick: QWord;
+  lastTick, lastPlayerTick: QWord;
+  loopMs: Integer;
   lsErr: AnsiString;
   lsPort: Integer;
   lsName: AnsiString;
@@ -2193,6 +2225,7 @@ begin
     end;
     idleSecs := 0;
     lastTick := GetTickCount64;
+    lastPlayerTick := 0;
     MaybeOpenStartUrl;
     repeat
       DrawAll;
@@ -2205,13 +2238,20 @@ begin
       else
       begin
         { a player window needs a fast tick for the visualizer and for
-          end-of-track detection }
-        if PlayerActive then TickPlayers;
+          end-of-track detection; a running game wakes the loop more
+          often, so keep the player at its own pace }
+        if PlayerActive and
+           (GetTickCount64 - lastPlayerTick >= QWord(PlayerTickMs)) then
+        begin
+          TickPlayers;
+          lastPlayerTick := GetTickCount64;
+        end;
         { LocalSend: read helper events once per idle tick. A live session
           resets the screen saver timer, so the saver never covers a
           transfer dialog. }
         DrainLsPipe;
-        if LsActive then idleSecs := 0;
+        { a game in play is not idle: the saver must not cover it }
+        if LsActive or GameActive then idleSecs := 0;
         { the screen saver counts real seconds of quiet, not ticks }
         if GetTickCount64 - lastTick >= 1000 then
         begin
@@ -2225,13 +2265,15 @@ begin
           idleSecs := 0;
         end;
       end;
+      { gravity runs on every pass, key or not, so holding a key never
+        stalls the falling piece }
+      TickGames;
       { the main-loop timeout: the smallest period of everything active }
-      if PlayerActive then
-        timeout(PlayerTickMs)
-      else if LsActive then
-        timeout(LsTickMs)
-      else
-        timeout(1000);
+      loopMs := 1000;
+      if GameActive then loopMs := TetrisTickMs;
+      if PlayerActive and (PlayerTickMs < loopMs) then loopMs := PlayerTickMs;
+      if LsActive and (LsTickMs < loopMs) then loopMs := LsTickMs;
+      timeout(loopMs);
       if Quit then
         while WinCount > 0 do
         begin

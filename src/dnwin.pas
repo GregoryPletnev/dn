@@ -30,7 +30,9 @@ type
     { called before closing; False cancels (e.g. unsaved changes) }
     function ConfirmClose: Boolean; virtual;
     procedure ZoomToggle;
-    procedure ClampToDesk;
+    { keep the window on the desktop; a fixed-size window raises the
+      minimum before calling inherited }
+    procedure ClampToDesk; virtual;
     function Inside(mx, my: Integer): Boolean;
     function OnCloseIcon(mx, my: Integer): Boolean;
     function OnZoomIcon(mx, my: Integer): Boolean;
