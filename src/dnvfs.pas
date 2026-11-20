@@ -126,6 +126,13 @@ function RunCapture(const Cmd: AnsiString; out Output: AnsiString;
 { run a shell command with Input on stdin, capture stdout+stderr }
 function RunCaptureInput(const Cmd, Input: AnsiString;
                           out Output: AnsiString): Integer;
+{ the full form: Input on stdin, Env ('NAME=value', set in the child only,
+  so a password never shows in `ps`), stdout and stderr apart }
+function RunCaptureEx(const Cmd, Input: AnsiString;
+                      const Env: array of AnsiString;
+                      out Output, ErrOutput: AnsiString;
+                      const Title: AnsiString = ''; const Detail: AnsiString = '';
+                      const CountWhat: AnsiString = ''): Integer;
 { parse 'ls -la'-style listing lines (bsdtar -tv, sftp ls -la) }
 function ParseLsLine(const Line: AnsiString; out Item: TVfsItem;
                      out FullName: AnsiString): Boolean;
@@ -247,9 +254,16 @@ end;
 { run ShellCmd (its own redirections included) in the background and wait,
   feeding RunBusyHook; returns the exit code or RunCancelledExit }
 function RunWaiting(const ShellCmd, OutF: AnsiString;
-                    var Busy: TRunBusy): Integer;
+                    var Busy: TRunBusy;
+                    const Env: array of AnsiString): Integer;
 {$ifdef unix}
 var
+  i, j, k: Integer;
+  envs: TStringList;
+  envStr: array of AnsiString;
+  envp: array of PChar;
+  argStr: array[0..2] of AnsiString;
+  argv: array[0..3] of PChar;
   pid, r: TPid;
   status: cint;
   start: QWord;
@@ -257,13 +271,39 @@ var
   cancel: Boolean;
 begin
   Result := -1;
+  { built before the fork: dn's environment plus Env (Env wins) }
+  envs := TStringList.Create;
+  try
+    for i := 1 to GetEnvironmentVariableCount do
+      envs.Add(GetEnvironmentString(i));
+    for i := 0 to High(Env) do
+    begin
+      k := Pos('=', Env[i]);
+      j := envs.IndexOfName(Copy(Env[i], 1, k - 1));
+      if j >= 0 then envs[j] := Env[i] else envs.Add(Env[i]);
+    end;
+    SetLength(envStr, envs.Count);
+    for i := 0 to envs.Count - 1 do envStr[i] := envs[i];
+  finally
+    envs.Free;
+  end;
+  SetLength(envp, Length(envStr) + 1);
+  for i := 0 to High(envStr) do envp[i] := PChar(envStr[i]);
+  envp[High(envp)] := nil;
+  argStr[0] := '/bin/sh';
+  argStr[1] := '-c';
+  argStr[2] := ShellCmd;
+  for i := 0 to 2 do argv[i] := PChar(argStr[i]);
+  argv[3] := nil;
   pid := fpFork;
   if pid < 0 then Exit;
   if pid = 0 then
   begin
     { own process group: a cancel stops the whole pipeline }
     c_setpgid(0, 0);
-    fpExecl('/bin/sh', ['-c', ShellCmd]);
+    { an explicit environment: FPC's exec passes the one captured at
+      startup, so a putenv() here would not reach the command }
+    fpExecve('/bin/sh', @argv[0], @envp[0]);
     fpExit(127);
   end;
   start := GetTickCount64;
@@ -302,14 +342,18 @@ begin
 end;
 {$endif}
 
-function RunLabelled(const Cmd, InF: AnsiString; out Output: AnsiString;
-                     const Title, Detail, CountWhat: AnsiString): Integer;
+function RunLabelledEx(const Cmd, InF: AnsiString;
+                       const Env: array of AnsiString; SplitErr: Boolean;
+                       out Output, ErrOutput: AnsiString;
+                       const Title, Detail, CountWhat: AnsiString): Integer;
 var
-  outF, sh: AnsiString;
+  outF, errF, sh: AnsiString;
   busy: TRunBusy;
 begin
   Output := '';
+  ErrOutput := '';
   outF := TempName('out-', '.out');
+  errF := TempName('err-', '.out');
   busy.Title := Title;
   busy.Detail := Detail;
   if busy.Title = '' then
@@ -323,15 +367,68 @@ begin
   busy.ElapsedMs := 0;
   { the subshell gives the whole command line one redirection; stdin is
     /dev/null (or InF), so no tool can sit waiting for the terminal }
-  sh := '( ' + Cmd + #10' ) >' + AnsiQuotedStr(outF, '''') + ' 2>&1 <';
-  if InF <> '' then sh := sh + AnsiQuotedStr(InF, '''')
-  else sh := sh + '/dev/null';
-  Result := RunWaiting(sh, outF, busy);
+  sh := '( ' + Cmd + #10' ) >' + AnsiQuotedStr(outF, '''');
+  if SplitErr then sh := sh + ' 2>' + AnsiQuotedStr(errF, '''')
+  else sh := sh + ' 2>&1';
+  if InF <> '' then sh := sh + ' <' + AnsiQuotedStr(InF, '''')
+  else sh := sh + ' </dev/null';
+  Result := RunWaiting(sh, outF, busy, Env);
   if Result = RunCancelledExit then
-    Output := 'cancelled'
+  begin
+    Output := '';
+    ErrOutput := 'cancelled';
+    if not SplitErr then Output := 'cancelled';
+  end
   else
+  begin
     Output := ReadWhole(outF);
+    if SplitErr then ErrOutput := ReadWhole(errF);
+  end;
   DeleteFile(outF);
+  DeleteFile(errF);
+end;
+
+function RunLabelled(const Cmd, InF: AnsiString; out Output: AnsiString;
+                     const Title, Detail, CountWhat: AnsiString): Integer;
+var
+  dummy: AnsiString;
+begin
+  Result := RunLabelledEx(Cmd, InF, [], False, Output, dummy, Title, Detail,
+                          CountWhat);
+end;
+
+function WriteTemp(const Data: AnsiString): AnsiString;
+var
+  f: THandle;
+begin
+  Result := TempName('in-', '.txt');
+  f := FileCreate(Result, &600);
+  if f = THandle(-1) then Exit('');
+  try
+    if Length(Data) > 0 then FileWrite(f, Data[1], Length(Data));
+  finally
+    FileClose(f);
+  end;
+end;
+
+function RunCaptureEx(const Cmd, Input: AnsiString;
+                      const Env: array of AnsiString;
+                      out Output, ErrOutput: AnsiString;
+                      const Title: AnsiString; const Detail: AnsiString;
+                      const CountWhat: AnsiString): Integer;
+var
+  inF: AnsiString;
+begin
+  inF := WriteTemp(Input);
+  if inF = '' then
+  begin
+    Output := '';
+    ErrOutput := 'cannot write a temporary file';
+    Exit(-1);
+  end;
+  Result := RunLabelledEx(Cmd, inF, Env, True, Output, ErrOutput, Title,
+                          Detail, CountWhat);
+  DeleteFile(inF);
 end;
 
 function RunCapture(const Cmd: AnsiString; out Output: AnsiString): Integer;

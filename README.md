@@ -173,6 +173,38 @@ Panels browse more than the local disk (ROADMAP M3):
 - **File list panel** (Ctrl+W, DN 2.12): read a text file of paths into a
   virtual listing.
 
+## Databases
+
+Disk → Databases… (Ctrl-Q) manages connections to PostgreSQL, ClickHouse
+and SQLite. dn runs their own clients — `psql` (12+), `clickhouse client`
+(or `clickhouse-client`), `sqlite3` — so TLS, every auth method and
+`~/.pgpass` work as usual.
+
+- **Manager:** Enter opens the database in the active panel, F2 opens an
+  SQL window, F5 tests the connection, Ins/F4/F8 add, edit, delete.
+  Connections live in `~/.config/dnfpc/databases` (INI, no passwords).
+- **Panel:** `db://name/` lists schemas (PostgreSQL) or databases
+  (ClickHouse) as directories, tables and views as files; the size column
+  is the row estimate. F3/Enter show the first 1000 rows in a grid, F4
+  opens an SQL window with a SELECT, F5 to a local panel exports the table
+  as CSV. The panel is read-only: changes go through SQL.
+- **SQLite files:** F3, F4 or Enter on an SQLite database file opens it
+  as a database in the panel, the way an archive opens as a directory (no
+  registry entry needed); `..` leads back to the file. dn tells the file
+  by its header, not its name: `app.db`, `data.sqlite3` and a browser's
+  `History` all open; a `.db` that is not SQLite opens as an ordinary file.
+- **SQL window:** an editor on `~/.config/dnfpc/sql/<name>.sql`, kept
+  between sessions. Ctrl-R runs the block under the cursor (the lines
+  between blank lines); the rows (up to 10000) appear in a grid below.
+  In a grid, arrows move the cell, Enter shows the whole value.
+- **Passwords:** when a login fails dn asks for the password and offers to
+  save it in `~/.config/dnfpc/vault.db` — an SQLite file (mode 0600) whose
+  entries are encrypted with a master password (PBKDF2-HMAC-SHA256,
+  ChaCha20 + HMAC-SHA256). The master password is asked once per dn run.
+  An unsaved password lives in memory until dn exits. Passwords reach the
+  clients through their environment (`PGPASSWORD`) or a 0600 temporary
+  config file (ClickHouse), never the command line.
+
 ## Slow operations
 
 Opening an archive, mounting a disk image, SFTP, (un)mounting and

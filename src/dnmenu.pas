@@ -46,6 +46,7 @@ const
   cmLocalSend    = 35;
   cmBrowser      = 36;
   cmDisks        = 37;
+  cmDatabases    = 38;
 
 procedure DrawBar(sel: Integer);
 { Modal menu loop; startSel = menu index to open (0-based), returns cm*. }
@@ -113,6 +114,7 @@ begin
   AddMenu('Disk');
   AddItem('SSH sessions...', 'Ctrl-S', cmSessions);
   AddItem('Connect sftp...', '', cmSftpConnect);
+  AddItem('Databases...', 'Ctrl-Q', cmDatabases);
   AddItem('Disks...', 'Ctrl-D', cmDisks);
   AddMenu('Commands');
   AddItem('User menu', 'F2', cmUserMenu);

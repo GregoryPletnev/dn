@@ -11,6 +11,7 @@ uses
   dnwin, dnview, dnedit, dnconfig, dnoptions, dnvfs, dnarcvfs, dnmount,
   dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver, dnconsole, dngpm,
   dnplaylist, dnplayer, dnlsproto, dnls, dnlsdisc, dnlsident, dnpath,
+  dndb, dndbvfs, dngrid, dndbui, dnvault,
   dndisks, dndisksui,
   dnhttp, dnhtml, dncss, dnlayout, dnjs, dnbrowser;
 
@@ -809,6 +810,98 @@ begin
   ;
 end;
 
+{ Databases (Disk menu, Ctrl-Q): pick a connection, open it in the active
+  panel or in an SQL window. }
+procedure DoDatabases;
+var
+  c: TDbConn;
+  v: TDbVFS;
+  items: TVfsItems;
+  err, here: AnsiString;
+begin
+  case DbManager(c) of
+    daOpen:
+      begin
+        if ActiveP.Vfs.IsLocal then here := ActiveP.Path else here := GetCurrentDir;
+        v := TDbVFS.CreateDb(c, here);
+        if v.List('', items, err) then
+          ActiveP.SetVfs(v, '')
+        else
+        begin
+          v.Free;
+          if err <> 'cancelled' then
+            MsgBox('Databases', 'Cannot open ' + c.Name + ':'#10 + err, ['OK']);
+        end;
+      end;
+    daSql: FocusWin := OpenSqlWindow(c, '');
+  end;
+end;
+
+{ F3/F4/Enter on an SQLite file in a local panel: browse it as a
+  database, the way an archive opens as a directory. False when the file
+  under the cursor is not one. }
+function OpenSqliteFile: Boolean;
+var
+  full, err: AnsiString;
+  v: TDbVFS;
+  items: TVfsItems;
+begin
+  Result := False;
+  if not ActiveP.Vfs.IsLocal or ActiveP.CurFile.IsDir then Exit;
+  full := VfsJoin(ActiveP.Path, ActiveP.CurFile.Name);
+  if not IsSqliteFile(full) then Exit;
+  Result := True;
+  v := TDbVFS.CreateDb(SqliteFileConn(full), ActiveP.Path);
+  v.LocalCursor := ActiveP.CurFile.Name;
+  if v.List('', items, err) then
+    ActiveP.SetVfs(v, '')
+  else
+  begin
+    v.Free;
+    if err <> 'cancelled' then
+      MsgBox('SQLite', 'Cannot open ' + ActiveP.CurFile.Name + ':'#10 + err, ['OK']);
+  end;
+end;
+
+{ the table under the cursor of a database panel ('' when on a schema) }
+function DbPanelTable(out V: TDbVFS; out Path: AnsiString): Boolean;
+begin
+  Result := False;
+  V := nil;
+  Path := '';
+  if not (ActiveP.Vfs is TDbVFS) then Exit;
+  V := TDbVFS(ActiveP.Vfs);
+  if ActiveP.CurFile.IsDir or (ActiveP.CurFile.Name = '') or
+     (ActiveP.CurFile.Name = '..') then Exit;
+  Path := VfsJoin(ActiveP.Path, ActiveP.CurFile.Name);
+  Result := True;
+end;
+
+{ F3/Enter on a table: its first rows in a grid }
+procedure DoDbPreview;
+var
+  v: TDbVFS;
+  path: AnsiString;
+  w: TGridWin;
+begin
+  if not DbPanelTable(v, path) then Exit;
+  w := OpenQueryGrid(v.Conn, v.PreviewSql(path, 1000),
+                     v.Conn.Name + ': ' + ActiveP.CurFile.Name);
+  if w <> nil then FocusWin := w;
+end;
+
+{ F4 in a database panel: an SQL window, with a SELECT for the table }
+procedure DoDbSql;
+var
+  v: TDbVFS;
+  path: AnsiString;
+begin
+  if DbPanelTable(v, path) then
+    FocusWin := OpenSqlWindow(v.Conn, v.PreviewSql(path, 100))
+  else if v <> nil then
+    FocusWin := OpenSqlWindow(v.Conn, '');
+end;
+
 procedure EnterOrLaunch;
 var
   av: TArchiveVFS;
@@ -821,6 +914,12 @@ begin
     ActiveP.EnterCurrent;
     Exit;
   end;
+  if ActiveP.Vfs is TDbVFS then
+  begin
+    DoDbPreview;
+    Exit;
+  end;
+  if OpenSqliteFile then Exit;
   { disk images (dmg, iso, …) auto-mount and open as directories }
   if ActiveP.Vfs.IsLocal and IsImageName(ActiveP.CurFile.Name) then
   begin
@@ -1115,6 +1214,12 @@ var
   w: TWin;
   lp: AnsiString;
 begin
+  if ActiveP.Vfs is TDbVFS then
+  begin
+    DoDbPreview;
+    Exit;
+  end;
+  if OpenSqliteFile then Exit;
   { F3 on a directory opens the player, queued recursively (PLAYER.md) }
   if ActiveP.CurFile.IsDir and (ActiveP.CurFile.Name <> '..') and
      ActiveP.Vfs.IsLocal then
@@ -1329,6 +1434,12 @@ var
   w: TEditWin;
   lp: AnsiString;
 begin
+  if ActiveP.Vfs is TDbVFS then
+  begin
+    DoDbSql;
+    Exit;
+  end;
+  if OpenSqliteFile then Exit;
   if not MaterializeCurrent(lp) then Exit;
   w := OpenEditor(lp);
   if w <> nil then
@@ -1362,6 +1473,7 @@ begin
     L.Add('  Ctrl-O           show shell screen (Ctrl-O returns)');
     L.Add('  Ctrl-R           re-read both panels');
     L.Add('  Ctrl-T           Tetris');
+    L.Add('  Ctrl-Q           Databases (PostgreSQL, ClickHouse, SQLite)');
     L.Add('  Alt-F8           stop the media player');
     L.Add('  F1               this help');
     L.Add('  F2               user menu (dn.mnu, see below)');
@@ -1665,6 +1777,7 @@ begin
     cmSessions: DoSessions;
     cmSftpConnect: DoSftpConnect;
     cmDisks: DoDisks;
+    cmDatabases: DoDatabases;
     cmUUEncode: DoUUEncode;
     cmUUDecode: DoUUDecode;
     cmPanelSetup: DoPanelSetup;
@@ -2100,6 +2213,7 @@ begin
     7:         CountDirSize;                   // Ctrl+G
     19:        DoSessions;                     // Ctrl+S: SSH sessions
     4:         DoDisks;                        // Ctrl+D: removable disks
+    17:        DoDatabases;                    // Ctrl+Q: databases
     21:        SwapPanels;                     // Ctrl+U
     5:         HistRecall(-1);                 // Ctrl+E: previous command
     24:        HistRecall(1);                  // Ctrl+X: next command
@@ -2361,6 +2475,9 @@ begin
   { slow external commands (archives, disk images, sftp) show a progress
     box with Esc to cancel }
   RunBusyHook := @BusyBox;
+  { saved DB passwords: the master password prompt; DB password prompt }
+  VaultAskHook := @AskVaultMaster;
+  DbPasswordHook := @AskDbPassword;
   ApplyPalette(Opt.Palette);
   ApplyHlPairs;
   RedrawBase := @DrawBase;

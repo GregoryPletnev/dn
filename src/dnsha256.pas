@@ -12,6 +12,9 @@ interface
 { digest of Data as 64 uppercase hex digits }
 function Sha256Hex(const Data: AnsiString): AnsiString;
 
+{ digest of Data as 32 raw bytes (HMAC and PBKDF2 build on it) }
+function Sha256Raw(const Data: AnsiString): AnsiString;
+
 { the DER bytes of the first certificate in a PEM text (curl's %{certs}
   output, or a .pem file); '' when there is none }
 function PemFirstCertDer(const Pem: AnsiString): AnsiString;
@@ -40,7 +43,7 @@ begin
   Result := (x shr n) or (x shl (32 - n));
 end;
 
-function Sha256Hex(const Data: AnsiString): AnsiString;
+function Sha256Raw(const Data: AnsiString): AnsiString;
 var
   h: array[0..7] of LongWord;
   w: array[0..63] of LongWord;
@@ -55,11 +58,17 @@ begin
 
   { padding: 0x80, zeros to 56 mod 64, then the bit length big-endian }
   bits := QWord(Length(Data)) * 8;
-  msg := Data + #$80;
-  while Length(msg) mod 64 <> 56 do
-    msg := msg + #0;
-  for i := 7 downto 0 do
-    msg := msg + Chr((bits shr (i * 8)) and $FF);
+  { pad in one allocation: PBKDF2 hashes short messages many times }
+  j := Length(Data) + 1;
+  while j mod 64 <> 56 do Inc(j);
+  SetLength(msg, j + 8);
+  if Length(Data) > 0 then
+    Move(Data[1], msg[1], Length(Data));
+  msg[Length(Data) + 1] := #$80;
+  for i := Length(Data) + 2 to j do
+    msg[i] := #0;
+  for i := 0 to 7 do
+    msg[j + 1 + i] := Chr((bits shr ((7 - i) * 8)) and $FF);
 
   blk := 0;
   while blk < Length(msg) do
@@ -92,9 +101,25 @@ begin
     Inc(blk, 64);
   end;
   {$pop}
-  Result := '';
+  SetLength(Result, 32);
   for i := 0 to 7 do
-    Result := Result + IntToHex(h[i], 8);
+  begin
+    Result[i * 4 + 1] := Chr(h[i] shr 24);
+    Result[i * 4 + 2] := Chr((h[i] shr 16) and $FF);
+    Result[i * 4 + 3] := Chr((h[i] shr 8) and $FF);
+    Result[i * 4 + 4] := Chr(h[i] and $FF);
+  end;
+end;
+
+function Sha256Hex(const Data: AnsiString): AnsiString;
+var
+  raw: AnsiString;
+  i: Integer;
+begin
+  raw := Sha256Raw(Data);
+  Result := '';
+  for i := 1 to 32 do
+    Result := Result + IntToHex(Ord(raw[i]), 2);
 end;
 
 function PemFirstCertDer(const Pem: AnsiString): AnsiString;

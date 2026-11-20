@@ -14,7 +14,7 @@ endif
 
 all: $(BIN)
 
-$(BIN): $(SRC) src/dnscreen.pas src/dnpanel.pas src/dnmenu.pas src/dndialog.pas src/dnfileops.pas src/dntetris.pas src/dnwin.pas src/dnview.pas src/dnedit.pas src/dnconfig.pas src/dnoptions.pas src/dnvfs.pas src/dnarcvfs.pas src/dnmount.pas src/dnsftp.pas src/dnsession.pas src/dnsessui.pas src/dnuu.pas src/dnusermenu.pas src/dnhighlite.pas src/dnsaver.pas src/dnconsole.pas src/dngpm.pas src/dnplaylist.pas src/dnaudio.pas src/dnplayer.pas src/dnlsproto.pas src/dnlshttp.pas src/dnls.pas src/dnlsdisc.pas src/dnlsident.pas src/dnsha256.pas src/dnpath.pas src/dnhttp.pas src/dnhtml.pas src/dncss.pas src/dnlayout.pas src/dnjs.pas src/dnbrowser.pas src/dndisks.pas src/dndisksui.pas
+$(BIN): $(SRC) src/dnscreen.pas src/dnpanel.pas src/dnmenu.pas src/dndialog.pas src/dnfileops.pas src/dntetris.pas src/dnwin.pas src/dnview.pas src/dnedit.pas src/dnconfig.pas src/dnoptions.pas src/dnvfs.pas src/dnarcvfs.pas src/dnmount.pas src/dnsftp.pas src/dnsession.pas src/dnsessui.pas src/dnuu.pas src/dnusermenu.pas src/dnhighlite.pas src/dnsaver.pas src/dnconsole.pas src/dngpm.pas src/dnplaylist.pas src/dnaudio.pas src/dnplayer.pas src/dnlsproto.pas src/dnlshttp.pas src/dnls.pas src/dnlsdisc.pas src/dnlsident.pas src/dnsha256.pas src/dncrypto.pas src/dnvault.pas src/dndb.pas src/dndbvfs.pas src/dngrid.pas src/dndbui.pas src/dnpath.pas src/dnhttp.pas src/dnhtml.pas src/dncss.pas src/dnlayout.pas src/dnjs.pas src/dnbrowser.pas src/dndisks.pas src/dndisksui.pas
 	@mkdir -p bin $(UNITDIR)
 	$(FPC) $(FPCFLAGS) $(SRC)
 

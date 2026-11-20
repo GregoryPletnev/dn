@@ -7,7 +7,7 @@ program unittests;
 uses
   BaseUnix, SysUtils, Classes, dnscreen, dnpanel, dnfileops, dnuu, dnvfs, dnsftp,
   dnsession, dnusermenu, dnhighlite, dnplaylist, dnaudio, dnlsproto,
-  dnhtml, dncss, dnhttp, dnlayout, dnpath, dnsha256, dnlsident, process;
+  dnhtml, dncss, dnhttp, dnlayout, dnpath, dnsha256, dnlsident, process, dncrypto, dnvault, dndb;
 
 var
   Failures: Integer = 0;
@@ -821,6 +821,158 @@ begin
   {$endif}
 end;
 
+var
+  VaultAnswers: array of AnsiString;
+  VaultAsked: Integer;
+
+function FakeVaultAsk(NewVault: Boolean; const Hint: AnsiString;
+                      out Master: AnsiString): Boolean;
+begin
+  Result := VaultAsked <= High(VaultAnswers);
+  if Result then Master := VaultAnswers[VaultAsked] else Master := '';
+  Inc(VaultAsked);
+end;
+
+function FileBytes(const Path: AnsiString): AnsiString;
+var
+  fs: TFileStream;
+begin
+  fs := TFileStream.Create(Path, fmOpenRead or fmShareDenyNone);
+  try
+    SetLength(Result, fs.Size);
+    if fs.Size > 0 then fs.ReadBuffer(Result[1], fs.Size);
+  finally
+    fs.Free;
+  end;
+end;
+
+procedure TestVault;
+var
+  err, secret: AnsiString;
+  st: Stat;
+begin
+  if FileExists(VaultPath) then DeleteFile(VaultPath);
+  Check(not VaultExists, 'vault: none at start');
+  Check(VaultUnlock('m4ster', err), 'vault: create ' + err);
+  Check(VaultExists, 'vault: exists after create');
+  Check(fpStat(PChar(VaultPath), st) = 0, 'vault: stat');
+  CheckEq(IntToStr(st.st_mode and &777), IntToStr(&600), 'vault: file mode 0600');
+  Check(VaultPut('pg/prod', 'p@ss w0rd', err), 'vault: put ' + err);
+  Check(VaultHas('pg/prod'), 'vault: has');
+  Check(not VaultHas('pg/other'), 'vault: has not');
+  VaultLock;
+  Check(not VaultUnlocked, 'vault: locked');
+  Check(not VaultUnlock('wrong', err), 'vault: wrong master refused');
+  CheckEq(err, 'wrong master password', 'vault: wrong master message');
+  { the ask hook: a wrong answer, then the right one }
+  VaultAskHook := @FakeVaultAsk;
+  SetLength(VaultAnswers, 2);
+  VaultAnswers[0] := 'nope';
+  VaultAnswers[1] := 'm4ster';
+  VaultAsked := 0;
+  Check(VaultGet('pg/prod', secret, err), 'vault: get after asking ' + err);
+  CheckEq(secret, 'p@ss w0rd', 'vault: secret back');
+  CheckEq(IntToStr(VaultAsked), '2', 'vault: asked twice');
+  Check(not VaultGet('pg/other', secret, err), 'vault: missing id');
+  Check(VaultDelete('pg/prod', err), 'vault: delete');
+  Check(not VaultHas('pg/prod'), 'vault: gone after delete');
+  { the secret is not stored in the clear }
+  Check(Pos('p@ss', FileBytes(VaultPath)) = 0, 'vault: no plaintext on disk');
+  VaultLock;
+  SetLength(VaultAnswers, 0);
+  VaultAsked := 0;
+  Check(not VaultEnsureUnlocked(err), 'vault: cancelled ask');
+  CheckEq(err, 'cancelled', 'vault: cancelled message');
+  VaultAskHook := nil;
+end;
+
+procedure TestDb;
+var
+  rows: TCsvRows;
+  a, b: TDbConns;
+  c: TDbConn;
+  r: TDbResult;
+  objs: TDbObjects;
+  err, dbf, csv: AnsiString;
+  k: TDbKind;
+begin
+  { CSV }
+  ParseCsv('id,name'#10'1,"a, b"'#10'2,"say ""hi"""'#10'3,"two'#10'lines"'#10'4,'#10,
+           rows);
+  CheckEq(IntToStr(Length(rows)), '5', 'csv rows');
+  CheckEq(rows[1][1], 'a, b', 'csv quoted comma');
+  CheckEq(rows[2][1], 'say "hi"', 'csv doubled quote');
+  CheckEq(rows[3][1], 'two'#10'lines', 'csv newline in field');
+  CheckEq(IntToStr(Length(rows[4])), '2', 'csv empty last field');
+  CheckEq(rows[4][1], '', 'csv empty value');
+  ParseCsv('a,b'#13#10'1,2'#13#10, rows);
+  CheckEq(rows[1][1], '2', 'csv crlf');
+  ParseCsv('', rows);
+  CheckEq(IntToStr(Length(rows)), '0', 'csv empty input');
+
+  { kinds, quoting }
+  Check(DbKindOf('PostgreSQL', k) and (k = dbPostgres), 'db kind alias pg');
+  Check(DbKindOf('ch', k) and (k = dbClickHouse), 'db kind alias ch');
+  Check(not DbKindOf('oracle', k), 'db kind unknown');
+  c.Kind := dbPostgres;
+  CheckEq(DbQualify(c, 'my schema', 'we"ird'), '"my schema"."we""ird"', 'pg qualify');
+  c.Kind := dbClickHouse;
+  CheckEq(DbQualify(c, 'db', 'a`b'), '`db`.`a``b`', 'ch qualify');
+  CheckEq(DbLiteral('it''s'), '''it''''s''', 'sql literal');
+
+  { registry round trip }
+  SetLength(a, 2);
+  a[0].Name := 'prod'; a[0].Folder := 'work'; a[0].Kind := dbPostgres;
+  a[0].Host := 'db.example'; a[0].Port := '5432'; a[0].User := 'app';
+  a[0].Database := 'main'; a[0].Options := '--set=sslmode=require';
+  a[0].SavePassword := True;
+  a[1].Name := 'local'; a[1].Folder := ''; a[1].Kind := dbSqlite;
+  a[1].Host := ''; a[1].Port := ''; a[1].User := ''; a[1].Database := '/tmp/x.db';
+  a[1].Options := ''; a[1].SavePassword := False;
+  DbSaveConns(a);
+  DbLoadConns(b);
+  CheckEq(IntToStr(Length(b)), '2', 'db registry count');
+  CheckEq(b[0].Host, 'db.example', 'db registry host');
+  CheckEq(b[0].Folder, 'work', 'db registry folder');
+  Check(b[0].SavePassword, 'db registry save flag');
+  Check(b[1].Kind = dbSqlite, 'db registry kind');
+  CheckEq(DbConnId(b[0]), 'db:work/prod', 'db conn id');
+  Check(Pos('app@db.example:5432/main', DbConnLabel(b[0])) > 0, 'db conn label');
+
+  { a real sqlite3 run }
+  if ExeSearch('sqlite3', GetEnvironmentVariable('PATH')) = '' then Exit;
+  dbf := GetTempDir + 'dn-db-' + IntToStr(GetProcessID) + '.sqlite';
+  DeleteFile(dbf);
+  c.Name := 'test'; c.Folder := ''; c.Kind := dbSqlite; c.Database := dbf;
+  c.Host := ''; c.Port := ''; c.User := ''; c.Options := ''; c.SavePassword := False;
+  Check(DbQuery(c, 'CREATE TABLE people(id INTEGER, name TEXT);' +
+                   'INSERT INTO people VALUES (1, ''Ann''), (2, ''Bo, "the" 2nd'');' +
+                   'CREATE VIEW v AS SELECT name FROM people;', 0, r, err),
+        'sqlite create ' + err);
+  CheckEq(r.Message, 'OK', 'sqlite ddl message');
+  Check(DbQuery(c, 'SELECT id, name FROM people ORDER BY id;', 0, r, err),
+        'sqlite select ' + err);
+  CheckEq(IntToStr(Length(r.Columns)), '2', 'sqlite columns');
+  CheckEq(r.Columns[1], 'name', 'sqlite column name');
+  CheckEq(IntToStr(Length(r.Rows)), '2', 'sqlite rows');
+  CheckEq(r.Rows[1][1], 'Bo, "the" 2nd', 'sqlite quoted value');
+  Check(DbQuery(c, 'SELECT id FROM people;', 1, r, err) and r.Truncated and
+        (Length(r.Rows) = 1), 'sqlite max rows');
+  Check(not DbQuery(c, 'SELECT * FROM nope;', 0, r, err), 'sqlite error');
+  Check(Pos('no such table', err) > 0, 'sqlite error text: ' + err);
+  Check(DbListObjects(c, '', objs, err), 'sqlite objects ' + err);
+  CheckEq(IntToStr(Length(objs)), '2', 'sqlite object count');
+  CheckEq(objs[0].Name + '/' + objs[0].Kind, 'people/table', 'sqlite table');
+  CheckEq(objs[1].Name + '/' + objs[1].Kind, 'v/view', 'sqlite view');
+  csv := dbf + '.csv';
+  Check(DbExportCsv(c, '', 'people', csv, err), 'sqlite export ' + err);
+  ParseCsv(FileBytes(csv), rows);
+  CheckEq(IntToStr(Length(rows)), '3', 'sqlite export rows');
+  CheckEq(rows[2][1], 'Bo, "the" 2nd', 'sqlite export value');
+  DeleteFile(csv);
+  DeleteFile(dbf);
+end;
+
 procedure TestWidth;
 begin
   CheckEq(IntToStr(Utf8Width('abc')), '3', 'width ascii');
@@ -837,6 +989,68 @@ begin
   CheckEq(Utf8Sanitize(#$C0#$AF), '··', 'sanitize overlong');
   CheckEq(Utf8Sanitize('ok 漢'#9'x'), 'ok 漢'#9'x', 'sanitize keeps text');
   CheckEq(Utf8Sanitize('a'#$7F#1), 'a··', 'sanitize DEL and C0');
+end;
+
+procedure TestCrypto;
+var
+  key, nonce, plain, ct, blob, back: AnsiString;
+  i: Integer;
+  t0: QWord;
+begin
+  { RFC 4231 test cases 1 and 2 }
+  CheckEq(ToHex(HmacSha256(StringOfChar(#$0b, 20), 'Hi There')),
+    'b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7',
+    'hmac-sha256 rfc4231 #1');
+  CheckEq(ToHex(HmacSha256('Jefe', 'what do ya want for nothing?')),
+    '5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843',
+    'hmac-sha256 rfc4231 #2');
+  { RFC 4231 case 6: a key longer than the block is hashed first }
+  CheckEq(ToHex(HmacSha256(StringOfChar(#$aa, 131),
+    'Test Using Larger Than Block-Size Key - Hash Key First')),
+    '60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54',
+    'hmac-sha256 rfc4231 #6');
+  { PBKDF2-HMAC-SHA256 (RFC 7914 section 11 and the common vectors) }
+  CheckEq(ToHex(Pbkdf2Sha256('password', 'salt', 1, 32)),
+    '120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b',
+    'pbkdf2 c=1');
+  CheckEq(ToHex(Pbkdf2Sha256('password', 'salt', 2, 32)),
+    'ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43',
+    'pbkdf2 c=2');
+  CheckEq(ToHex(Pbkdf2Sha256('password', 'salt', 4096, 32)),
+    'c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a',
+    'pbkdf2 c=4096');
+  CheckEq(ToHex(Pbkdf2Sha256('passwd', 'salt', 1, 64)),
+    '55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc' +
+    '49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783',
+    'pbkdf2 rfc7914 64 bytes');
+  { RFC 8439 2.4.2 }
+  SetLength(key, 32);
+  for i := 0 to 31 do key[i + 1] := Chr(i);
+  nonce := #0#0#0#0#0#0#0#$4a#0#0#0#0;
+  plain := 'Ladies and Gentlemen of the class of ''99: If I could offer you ' +
+           'only one tip for the future, sunscreen would be it.';
+  ct := ChaCha20(key, nonce, 1, plain);
+  CheckEq(ToHex(ct),
+    '6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0b' +
+    'f91b65c5524733ab8f593dabcd62b3571639d624e65152ab8f530c359f0861d8' +
+    '07ca0dbf500d6a6156a38e088a22b65e52bc514d16ccf806818ce91ab7793736' +
+    '5af90bbf74a35be6b40b8eedf2785e42874d', 'chacha20 rfc8439 2.4.2');
+  CheckEq(ChaCha20(key, nonce, 1, ct), plain, 'chacha20 round trip');
+  { seal / unseal }
+  key := RandomBytes(64);
+  blob := Seal(key, 's3cret pa55');
+  Check(Unseal(key, blob, back) and (back = 's3cret pa55'), 'seal round trip');
+  Check(Seal(key, 'x') <> Seal(key, 'x'), 'seal uses a fresh nonce');
+  blob[20] := Chr(Ord(blob[20]) xor 1);
+  Check(not Unseal(key, blob, back), 'unseal rejects a changed byte');
+  blob := Seal(key, 'abc');
+  Check(not Unseal(RandomBytes(64), blob, back), 'unseal rejects another key');
+  Check(not Unseal(key, 'v1short', back), 'unseal rejects a short blob');
+  CheckEq(FromHex(ToHex(#0#255'a')), #0#255'a', 'hex round trip');
+  { the vault uses 200000 rounds: keep the unlock under ~2 s }
+  t0 := GetTickCount64;
+  Pbkdf2Sha256('master', 'saltsaltsaltsalt', 20000, 64);
+  WriteLn('  pbkdf2: 20000 rounds x2 blocks in ', GetTickCount64 - t0, ' ms');
 end;
 
 procedure TestSha256;
@@ -2293,6 +2507,9 @@ begin
   TestLsProto;
   TestLsDiscovery;
   TestSha256;
+  TestCrypto;
+  TestVault;
+  TestDb;
   TestWidth;
   TestLsIdentity;
   TestHtmlTokenizer;

@@ -17,6 +17,10 @@ function MsgBox(const Title, Msg: AnsiString;
 function InputBox(const Title, Prompt: AnsiString;
                   var Value: AnsiString): Boolean;
 
+{ InputBox that shows '*' for every character typed (passwords) }
+function PasswordBox(const Title, Prompt: AnsiString;
+                     var Value: AnsiString): Boolean;
+
 { Checkbox-list dialog ("[X] item" rows). Space or mouse toggles, Enter/OK
   accepts, Esc/Cancel leaves Flags untouched. Returns True on accept. }
 function CheckListDialog(const Title: AnsiString;
@@ -32,6 +36,14 @@ function HighlightDialog(var Groups: THlGroups): Boolean;
   cancels. Returns the chosen index or -1. A digit jumps to item 1..9;
   a letter jumps to the next item starting with it. }
 function ListDialog(const Title: AnsiString; Items: TStrings): Integer;
+
+{ A list with action keys: arrows/mouse move the cursor, a key from Keys
+  (10 = Enter, a double click is Enter) ends the dialog with Result True,
+  Key set and Cur on the row; Esc returns False. Works on an empty list
+  too (Cur = 0, for keys like Ins). Hint is shown under the rows. }
+function KeyListDialog(const Title, Hint: AnsiString; Items: TStrings;
+                       const Keys: array of LongInt; var Cur: Integer;
+                       out Key: LongInt): Boolean;
 
 { Draw a message box and return at once (no key wait): the screen shows
   it while the caller does blocking work; the next redraw removes it. }
@@ -57,9 +69,10 @@ procedure BusyBoxRedraw;
 implementation
 
 uses
-  SysUtils, ncurses, dnscreen;
+  SysUtils, Math, ncurses, dnscreen;
 
 var
+  InputMasked: Boolean = False;     // PasswordBox around InputBox
   BusyNeedsBase: Boolean = False;   // BusyBox repaints the screen first
   BusyLines: Integer = -1;          // the size BusyBox last drew at
   BusyCols: Integer = -1;
@@ -555,6 +568,107 @@ begin
   refresh;
 end;
 
+function KeyListDialog(const Title, Hint: AnsiString; Items: TStrings;
+                       const Keys: array of LongInt; var Cur: Integer;
+                       out Key: LongInt): Boolean;
+var
+  w, h, y, x, i, top, ch, rows: Integer;
+  me: MEVENT;
+
+  procedure Draw;
+  var
+    j, idx, pair: Integer;
+    s: AnsiString;
+  begin
+    Base;
+    DrawBox(y, x, h, w, Title);
+    for j := 0 to rows - 1 do
+    begin
+      idx := top + j;
+      if idx < Items.Count then s := ' ' + Items[idx] + ' ' else s := '';
+      if (idx = Cur) and (Items.Count > 0) then pair := cpMenuSel
+      else pair := cpMenuBar;
+      PutStr(y + 1 + j, x + 2, Utf8PadRight(s, w - 4), pair);
+    end;
+    PutStr(y + h - 2, x + 2, Utf8PadRight(' ' + Hint, w - 4), cpMenuBar);
+    refresh;
+  end;
+
+  function IsActionKey(k: LongInt): Boolean;
+  var
+    j: Integer;
+  begin
+    for j := 0 to High(Keys) do
+      if Keys[j] = k then Exit(True);
+    Result := False;
+  end;
+
+begin
+  Result := False;
+  Key := 0;
+  w := Utf8Width(Hint) + 6;
+  if w < 50 then w := 50;
+  for i := 0 to Items.Count - 1 do
+    if Utf8Width(Items[i]) + 6 > w then w := Utf8Width(Items[i]) + 6;
+  if w > COLS - 4 then w := COLS - 4;
+  rows := Items.Count;
+  if rows < 1 then rows := 1;
+  if rows > LINES - 8 then rows := LINES - 8;
+  h := rows + 3;                      // the hint line under the rows
+  y := (LINES - h) div 2;
+  x := (COLS - w) div 2;
+  if Cur >= Items.Count then Cur := Items.Count - 1;
+  if Cur < 0 then Cur := 0;
+  top := 0;
+  repeat
+    if Cur < top then top := Cur;
+    if Cur >= top + rows then top := Cur - rows + 1;
+    Draw;
+    ch := getch;
+    case ch of
+      ERR: ;
+      27: Exit(False);
+      KEY_UP: if Cur > 0 then Dec(Cur);
+      KEY_DOWN: if Cur < Items.Count - 1 then Inc(Cur);
+      KEY_HOME: Cur := 0;
+      KEY_END: Cur := Items.Count - 1;
+      KEY_PPAGE: begin Dec(Cur, rows); if Cur < 0 then Cur := 0; end;
+      KEY_NPAGE:
+        begin
+          Inc(Cur, rows);
+          if Cur > Items.Count - 1 then Cur := Items.Count - 1;
+        end;
+      KEY_MOUSE:
+        if (getmouse(@me) = OK) and
+           ((me.bstate and (mbtn1Clicked or mbtn1Pressed or mbtn1Double)) <> 0) then
+        begin
+          if (me.y >= y + 1) and (me.y < y + 1 + rows) and
+             (top + me.y - (y + 1) < Items.Count) then
+          begin
+            Cur := top + me.y - (y + 1);
+            if (me.bstate and mbtn1Double) <> 0 then
+            begin
+              Key := 10;
+              Exit(True);
+            end;
+          end
+          else if not ((me.x >= x) and (me.x < x + w) and (me.y >= y) and
+                       (me.y < y + h)) then
+            Exit(False);
+        end;
+    else
+      begin
+        if (ch = 13) or (ch = KEY_ENTER) then ch := 10;
+        if IsActionKey(ch) then
+        begin
+          Key := ch;
+          Exit(True);
+        end;
+      end;
+    end;
+  until False;
+end;
+
 procedure InfoBox(const Title, Msg: AnsiString);
 var
   w, h, y, x: Integer;
@@ -576,6 +690,17 @@ begin
   Result := LiveListDialog(Title, Items, nil, 0, 0);
 end;
 
+function PasswordBox(const Title, Prompt: AnsiString;
+                     var Value: AnsiString): Boolean;
+begin
+  InputMasked := True;
+  try
+    Result := InputBox(Title, Prompt, Value);
+  finally
+    InputMasked := False;
+  end;
+end;
+
 function InputBox(const Title, Prompt: AnsiString;
                   var Value: AnsiString): Boolean;
 var
@@ -593,7 +718,11 @@ var
     PutStr(y + 1, x + 2, Prompt, cpMenuBar);
     if caret < ofs then ofs := caret;
     if caret - ofs >= fw then ofs := caret - fw + 1;
-    vis := Utf8PadRight(Utf8Copy(Value, ofs + 1, fw), fw);
+    if InputMasked then
+      vis := Utf8PadRight(StringOfChar('*',
+               Max(0, Min(fw, Utf8Len(Value) - ofs))), fw)
+    else
+      vis := Utf8PadRight(Utf8Copy(Value, ofs + 1, fw), fw);
     PutStr(y + 2, x + 2, vis, cpInput);
     if focus = 0 then  // visible caret cell
       PutStr(y + 2, x + 2 + caret - ofs,
