@@ -99,3 +99,22 @@ def test_quick_commands_show_no_box(sandbox):
         assert b'Reading archive' not in s.raw[start:]
     finally:
         s.close()
+
+
+@needs_bsdtar
+def test_resize_repaints_under_the_progress_box(slow_sandbox):
+    s = slow_session(slow_sandbox, 3)
+    try:
+        s.key('ENTER')
+        s.wait_text('Reading archive')
+        s.resize(30, 100)
+        time.sleep(0.6)
+        s.pump(0.3)
+        rows = [l for l in s.display() if 'Reading archive' in l]
+        assert len(rows) == 1, 'old boxes left behind:\n' + s.dump()
+        line = rows[0]
+        mid = (line.index('┌') + line.rindex('┐')) // 2
+        assert abs(mid - 50) <= 2, 'the box is not centred at 100 columns'
+        s.wait_text('f00.txt', timeout=10)
+    finally:
+        s.close()

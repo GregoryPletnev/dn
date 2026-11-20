@@ -50,11 +50,19 @@ function LiveListDialog(const Title: AnsiString; Items: TStrings;
 { the progress box RunCapture shows for a slow external command: install
   with RunBusyHook := @BusyBox once the screen is up }
 procedure BusyBox(const Busy: TRunBusy; var Cancel: Boolean);
+{ the next BusyBox repaints the whole screen first (after a dialog drew
+  over it) }
+procedure BusyBoxRedraw;
 
 implementation
 
 uses
   SysUtils, ncurses, dnscreen;
+
+var
+  BusyNeedsBase: Boolean = False;   // BusyBox repaints the screen first
+  BusyLines: Integer = -1;          // the size BusyBox last drew at
+  BusyCols: Integer = -1;
 
 procedure Base;
 begin
@@ -479,6 +487,11 @@ end;
 
 { --- progress box for external commands (dnvfs.RunBusyHook) ------------ }
 
+procedure BusyBoxRedraw;
+begin
+  BusyNeedsBase := True;
+end;
+
 procedure BusyBox(const Busy: TRunBusy; var Cancel: Boolean);
 const
   W = 56;
@@ -487,6 +500,24 @@ var
   y, x, bw, fill, pos, i, ch, saved: Integer;
   bar, info, secs: AnsiString;
 begin
+  { keys first: Esc cancels, a resize means the screen under the box is
+    gone; every other key is dropped while the command runs }
+  saved := CurrentTimeout;
+  timeout(0);
+  repeat
+    ch := getch;
+    if ch = 27 then Cancel := True;
+    if ch = KEY_RESIZE then BusyNeedsBase := True;
+  until ch = ERR;
+  timeout(saved);
+  if (LINES <> BusyLines) or (COLS <> BusyCols) then BusyNeedsBase := True;
+  if BusyNeedsBase then
+  begin
+    Base;                      // the whole screen again, at the new size
+    BusyNeedsBase := False;
+    BusyLines := LINES;
+    BusyCols := COLS;
+  end;
   y := (LINES - 5) div 2;
   x := (COLS - W) div 2;
   if x < 0 then x := 0;
@@ -522,15 +553,6 @@ begin
   PutStr(y + 3, x + 2, Utf8PadRight(' ' + info, W - 4 - 12) +
          Utf8PadRight('Esc cancel', 12), cpMenuBar);
   refresh;
-
-  { Esc cancels; every other key is dropped while the command runs }
-  saved := CurrentTimeout;
-  timeout(0);
-  repeat
-    ch := getch;
-    if ch = 27 then Cancel := True;
-  until ch = ERR;
-  timeout(saved);
 end;
 
 procedure InfoBox(const Title, Msg: AnsiString);
