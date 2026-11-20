@@ -7,7 +7,7 @@ program unittests;
 uses
   BaseUnix, SysUtils, Classes, dnscreen, dnpanel, dnfileops, dnuu, dnvfs, dnsftp,
   dnsession, dnusermenu, dnhighlite, dnplaylist, dnaudio, dnlsproto,
-  dnhtml, dncss, dnhttp, dnlayout, dnpath;
+  dnhtml, dncss, dnhttp, dnlayout, dnpath, dnsha256, dnlsident, process;
 
 var
   Failures: Integer = 0;
@@ -792,6 +792,129 @@ begin
   CheckEq(ClsStrSt(md, '  x', st), '...', 'md header has no continuation');
 end;
 
+procedure TestLsIdentity;
+var
+  err, fp, outp: AnsiString;
+  args: TStringArray;
+  status: Integer;
+begin
+  if ExeSearch('openssl', GetEnvironmentVariable('PATH')) = '' then Exit;
+  Check(LsEnsureIdentity(err), 'ls identity created: ' + err);
+  fp := LsIdentityFingerprint;
+  CheckEq(IntToStr(Length(fp)), '64', 'ls identity fingerprint is a sha256');
+  Check(LsEnsureIdentity(err), 'ls identity kept');
+  CheckEq(LsIdentityFingerprint, fp, 'ls identity fingerprint stable');
+  args := LsCurlClientCertArgs;
+  Check(Length(args) > 0, 'ls identity curl args');
+  { openssl agrees on the fingerprint }
+  RunCommandIndir(LsIdentityDir, '/bin/sh',
+    ['-c', 'openssl x509 -in cert.pem -noout -fingerprint -sha256'],
+    outp, status, []);
+  CheckEq(StringReplace(Copy(Trim(outp), Pos('=', outp) + 1, 200), ':', '',
+                        [rfReplaceAll]), fp, 'ls identity matches openssl');
+  {$ifdef darwin}
+  { the PKCS#12 for Secure Transport curl opens with its password }
+  Check(RunCommandIndir(LsIdentityDir, '/bin/sh',
+    ['-c', '/usr/bin/openssl pkcs12 -in cert.p12 -passin pass:dn -nokeys ' +
+           '>/dev/null 2>&1'], outp, status, []) = 0, 'ls p12 runs');
+  Check(status = 0, 'ls p12 opens with its password');
+  {$endif}
+end;
+
+procedure TestSha256;
+var
+  million: AnsiString;
+begin
+  CheckEq(Sha256Hex(''),
+    'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855',
+    'sha256 empty');
+  CheckEq(Sha256Hex('abc'),
+    'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD',
+    'sha256 abc');
+  CheckEq(Sha256Hex('abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq'),
+    '248D6A61D20638B8E5C026930C3E6039A33CE45964FF2167F6ECEDD419DB06C1',
+    'sha256 two blocks');
+  million := StringOfChar('a', 1000000);
+  CheckEq(Sha256Hex(million),
+    'CDC76E5C9914FB9281A1C7E284D73E67F1809A48A497200E046D39CCC7112CD0',
+    'sha256 million a');
+  CheckEq(PemFirstCertDer('Certificate:'#10'-----BEGIN CERTIFICATE-----'#10 +
+    'aGVs'#10'bG8='#10'-----END CERTIFICATE-----'#10 +
+    '-----BEGIN CERTIFICATE-----'#10'eA=='#10'-----END CERTIFICATE-----'#10),
+    'hello', 'pem first certificate');
+  CheckEq(PemFirstCertDer('no certificate here'), '', 'pem without certificate');
+end;
+
+procedure TestLsDiscovery;
+var
+  info, back: TDeviceInfo;
+  ann: Boolean;
+  devs: TLsDevices;
+  ev, rev: TLsEvent;
+  fp: AnsiString;
+begin
+  info.Alias := 'MBP1';
+  info.Version := '2.1';
+  info.DeviceModel := 'macOS';
+  info.DeviceType := 'desktop';
+  info.Fingerprint := 'F1';
+  info.Port := 53317;
+  info.Protocol := 'http';
+
+  Check(ParseAnnounce(BuildAnnounce(info, True), back, ann), 'ls announce parse');
+  Check(ann, 'ls announce flag');
+  CheckEq(back.Alias, 'MBP1', 'ls announce alias');
+  CheckEq(back.Fingerprint, 'F1', 'ls announce fingerprint');
+  Check(ParseAnnounce(BuildAnnounce(info, False), back, ann), 'ls answer parse');
+  Check(not ann, 'ls answer is not an announce');
+  Check(ParseAnnounce('{"alias":"Old","announcement":true}', back, ann),
+        'ls v1 announcement parse');
+  Check(ann, 'ls v1 announcement flag');
+  CheckEq(IntToStr(back.Port), '53317', 'ls announce default port');
+  CheckEq(back.Protocol, 'https', 'ls announce default protocol');
+  Check(not ParseAnnounce('{"announce":true}', back, ann),
+        'ls announce without alias rejected');
+  Check(not ParseAnnounce('garbage', back, ann), 'ls bad announce rejected');
+
+  fp := LsFingerprint('dn:host:user');
+  CheckEq(IntToStr(Length(fp)), '32', 'ls fingerprint length');
+  CheckEq(fp, LsFingerprint('dn:host:user'), 'ls fingerprint stable');
+  Check(fp <> LsFingerprint('dn:host:other'), 'ls fingerprint differs');
+
+  SetLength(devs, 0);
+  Check(DevicesUpsert(devs, info, '192.168.1.5', 1), 'ls upsert adds');
+  Check(not DevicesUpsert(devs, info, '192.168.1.5', 2), 'ls upsert same is quiet');
+  CheckEq(IntToStr(Length(devs)), '1', 'ls upsert keeps one entry');
+  Check(devs[0].Seen = 2, 'ls upsert refreshes seen');
+  info.Alias := 'MBP1 renamed';
+  Check(DevicesUpsert(devs, info, '192.168.1.6', 3), 'ls upsert update changes');
+  CheckEq(devs[0].Addr, '192.168.1.6', 'ls upsert new address');
+  CheckEq(DeviceBase(devs[0]), '192.168.1.6:53317', 'ls http base');
+  info.Fingerprint := 'F2';
+  info.Protocol := 'https';
+  info.Port := 53318;
+  DevicesUpsert(devs, info, '192.168.1.7', 4);
+  CheckEq(IntToStr(Length(devs)), '2', 'ls second device');
+  CheckEq(DeviceBase(devs[1]), 'https://192.168.1.7:53318', 'ls https base');
+  Check(Pos('192.168.1.7', DeviceLabel(devs[1])) > 0, 'ls label shows address');
+  Check(Pos('HTTPS', DeviceLabel(devs[1])) > 0, 'ls label shows protocol');
+
+  ev.Kind := lePeer;
+  ev.SessionId := '';
+  ev.PeerName := 'MBP1';
+  ev.PeerAddr := '10.0.0.2';
+  ev.Err := '';
+  ev.BytesDone := 0;
+  ev.BytesTotal := 0;
+  SetLength(ev.Files, 0);
+  ev.PeerInfo := BuildDeviceInfo(info);
+  Check(ParseEventLine(BuildEventLine(ev), rev), 'ls peer event parse');
+  Check(rev.Kind = lePeer, 'ls peer event kind');
+  CheckEq(rev.PeerAddr, '10.0.0.2', 'ls peer event addr');
+  Check(ParseDeviceInfo(rev.PeerInfo, back), 'ls peer event info');
+  CheckEq(back.Fingerprint, 'F2', 'ls peer event fingerprint');
+end;
+
 procedure TestLsProto;
 var
   info, back: TDeviceInfo;
@@ -849,6 +972,16 @@ begin
   CheckEq(rresp.SessionId, 'sess-1', 'ls prepare session');
   Check(Length(rresp.Accepted) = 1, 'ls prepare accepted count');
   CheckEq(rresp.Accepted[0], 'f1', 'ls prepare accepted id');
+  { protocol v2: the value is the upload token string }
+  SetLength(resp.Tokens, 1);
+  resp.Tokens[0] := 'tok-1';
+  Check(Pos('"f1" : "tok-1"', BuildPrepareResponse(resp)) > 0,
+        'ls prepare token is a string');
+  Check(ParsePrepareResponse(BuildPrepareResponse(resp), rresp), 'ls prepare token parse');
+  CheckEq(rresp.Tokens[0], 'tok-1', 'ls prepare token');
+  Check(ParsePrepareResponse('{"sessionId":"s","files":{"a":"t-a","b":"t-b"}}', rresp),
+        'ls LocalSend prepare response parse');
+  CheckEq(rresp.Tokens[1], 't-b', 'ls LocalSend second token');
 
   { decision line }
   Check(ParseEventLine(BuildDecision('sess-1', True), ev), 'ls decision parse');
@@ -2140,6 +2273,9 @@ begin
   TestAudioAnalyzer;
   TestEqualizer;
   TestLsProto;
+  TestLsDiscovery;
+  TestSha256;
+  TestLsIdentity;
   TestHtmlTokenizer;
   TestHtmlTree;
   TestHtmlEntities;

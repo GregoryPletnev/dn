@@ -10,7 +10,7 @@ uses
   dnscreen, dnpanel, dnmenu, dndialog, dnfileops, dntetris,
   dnwin, dnview, dnedit, dnconfig, dnoptions, dnvfs, dnarcvfs, dnmount,
   dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver, dnconsole, dngpm,
-  dnplaylist, dnplayer, dnlsproto, dnls, dnpath,
+  dnplaylist, dnplayer, dnlsproto, dnls, dnlsdisc, dnlsident, dnpath,
   dndisks, dndisksui,
   dnhttp, dnhtml, dncss, dnlayout, dnjs, dnbrowser;
 
@@ -1187,12 +1187,121 @@ begin
   StartUrl := '';
 end;
 
-{ LocalSend: ask for a peer address, then send the selected files to it.
-  The helper process is not needed for the send path: the client runs in
-  this process, and the dialog blocks only for the duration of the send. }
+{ Start (or refresh) LocalSend discovery. Answering other peers'
+  announces only makes sense while the receive helper runs. }
+procedure LsDiscEnsure(out Err: AnsiString);
+var
+  info: TDeviceInfo;
+  identErr: AnsiString;
+begin
+  { the certificate HTTPS peers ask for; without openssl discovery and
+    plain HTTP still work }
+  LsEnsureIdentity(identErr);
+  info := LsSelfInfo(Opt.LocalSendPort);
+  if not LsRunning then
+    info.Port := 0;            // discovery serves /register itself
+  LsDiscStart(info, LsRunning, Err);
+end;
+
+const
+  LsManualItem = 'Enter address manually...';
+  LsSearchItem = '  searching for devices...';
+  LsReannounceMs = 3000;
+
+var
+  LsPickDevs: TLsDevices;        // the devices behind rows 1.. of the picker
+  LsPickNote: AnsiString;        // why discovery is off, '' when it runs
+  LsPickAnnounced: QWord;
+
+{ LiveListDialog refresh: read packets, re-announce now and then, rebuild
+  the rows. Row 0 is the manual entry, so arriving devices (appended at
+  the end) never move the row under the cursor. }
+function LsPickRefresh(Items: TStrings): Boolean;
+var
+  i: Integer;
+  before: AnsiString;
+begin
+  before := Items.Text;
+  if LsDiscRunning then
+  begin
+    LsDiscPoll;
+    DrainLsPipe;                 // /register answers come through the helper
+    if GetTickCount64 - LsPickAnnounced >= LsReannounceMs then
+    begin
+      LsDiscAnnounce;
+      LsPickAnnounced := GetTickCount64;
+    end;
+  end;
+  LsPickDevs := LsDiscDevices;
+  Items.BeginUpdate;
+  try
+    Items.Clear;
+    Items.Add(LsManualItem);
+    for i := 0 to High(LsPickDevs) do
+      Items.Add(DeviceLabel(LsPickDevs[i]));
+    if Length(LsPickDevs) = 0 then
+    begin
+      if LsPickNote <> '' then
+        Items.Add('  discovery off: ' + LsPickNote)
+      else if LsDiscLastError <> '' then
+        Items.Add('  ' + LsDiscLastError)
+      else
+        Items.Add(LsSearchItem);
+    end;
+  finally
+    Items.EndUpdate;
+  end;
+  Result := Items.Text <> before;
+end;
+
+{ The device picker: the address of the chosen peer ("ip:port", or
+  "https://ip:port"), the typed address, or '' when cancelled. PinFp is
+  the chosen device's fingerprint ('' for a typed address). }
+function LsPickTarget(out PinFp: AnsiString): AnsiString;
+var
+  items: TStringList;
+  idx: Integer;
+  typed: AnsiString;
+begin
+  Result := '';
+  PinFp := '';
+  LsDiscEnsure(LsPickNote);
+  LsPickAnnounced := GetTickCount64;
+  items := TStringList.Create;
+  try
+    repeat
+      LsPickRefresh(items);
+      idx := LiveListDialog('LocalSend: send to', items, @LsPickRefresh,
+                            200, 64);
+      if idx < 0 then Exit;
+      if idx = 0 then
+      begin
+        typed := GetEnvironmentVariable('DN_LS_ENDPOINT');
+        if not InputBox('LocalSend', 'Send to host:port', typed) then
+          Continue;
+        if typed <> '' then Exit(typed);
+        Continue;
+      end;
+      if idx - 1 <= High(LsPickDevs) then
+      begin
+        if LsPickDevs[idx - 1].Info.Protocol = 'https' then
+          PinFp := LsPickDevs[idx - 1].Info.Fingerprint;
+        Exit(DeviceBase(LsPickDevs[idx - 1]));
+      end;
+      { the "searching" row: keep looking }
+    until False;
+  finally
+    items.Free;
+  end;
+end;
+
+{ LocalSend: pick a nearby device (or type an address), then send the
+  selected files to it. The helper process is not needed for the send
+  path: the client runs in this process, and the dialog blocks only for
+  the duration of the send. }
 procedure DoLocalSend;
 var
-  base, err: AnsiString;
+  base, err, pin: AnsiString;
   paths: TStringList;
   i, sent: Integer;
 begin
@@ -1206,17 +1315,19 @@ begin
     for i := 0 to High(ActiveP.Files) do
       if ActiveP.Files[i].Sel then
         paths.Add(VfsJoin(ActiveP.Path, ActiveP.Files[i].Name));
-    if (paths.Count = 0) and (ActiveP.CurFile.Name <> '') then
+    if (paths.Count = 0) and (ActiveP.CurFile.Name <> '') and
+       (ActiveP.CurFile.Name <> '..') then
       paths.Add(VfsJoin(ActiveP.Path, ActiveP.CurFile.Name));
     if paths.Count = 0 then
     begin
       MsgBox('LocalSend', 'No file is selected.', ['OK']);
       Exit;
     end;
-    base := '';
-    if not InputBox('LocalSend', 'Send to host:port', base) then Exit;
+    base := LsPickTarget(pin);
     if base = '' then Exit;
-    if LsSend(base, paths, sent, err) then
+    { prepare-upload blocks until the other side accepts: say so }
+    InfoBox('LocalSend', 'Waiting for the other device to accept...');
+    if LsSend(base, paths, sent, err, pin) then
       MsgBox('LocalSend', 'Sent ' + IntToStr(sent) + ' file(s).', ['OK'])
     else
       MsgBox('LocalSend', 'Send failed:'#10 + err, ['OK']);
@@ -2145,6 +2256,10 @@ var
   lsName: AnsiString;
   ShowPathHint: Boolean;
   instExe, instLink, instErr: AnsiString;
+  scanInfo: TDeviceInfo;
+  scanDevs: TLsDevices;
+  scanEnd, scanNext: QWord;
+  scanI: Integer;
 
 begin
   {$ifdef unix}
@@ -2170,6 +2285,48 @@ begin
     LsSetDeviceName(lsName);
     LsHelperMain(lsPort, lsName, GetUserDir);
     Halt(0);
+  end;
+  { dn --localsend-scan [seconds]: announce, print every discovery packet
+    and the devices found, exit. A plain-terminal diagnostic for "the
+    device list stays empty". }
+  if (ParamCount >= 1) and (ParamStr(1) = '--localsend-scan') then
+  begin
+    OptLoad;
+    LsSetDeviceName(Opt.LocalSendName);
+    if not LsEnsureIdentity(lsErr) then
+      WriteLn('dn: no certificate (HTTPS devices will refuse): ', lsErr);
+    scanInfo := LsSelfInfo(0);
+    scanInfo.Port := 0;          // serve /register answers ourselves
+    if not LsDiscStart(scanInfo, False, lsErr) then
+    begin
+      WriteLn(StdErr, 'dn: discovery failed: ', lsErr);
+      Halt(1);
+    end;
+    WriteLn('dn: scanning as "', scanInfo.Alias, '" fingerprint ',
+            scanInfo.Fingerprint, ', answers on port ', LsDiscSelfPort);
+    { trace from here on: the header comes first, then a traced announce }
+    LsDiscTrace := True;
+    LsDiscAnnounce;
+    scanEnd := GetTickCount64 + QWord(1000 * StrToIntDef(ParamStr(2), 6));
+    scanNext := GetTickCount64 + 2000;
+    while GetTickCount64 < scanEnd do
+    begin
+      LsDiscPoll;
+      if GetTickCount64 >= scanNext then
+      begin
+        LsDiscAnnounce;
+        scanNext := GetTickCount64 + 2000;
+      end;
+      Sleep(50);
+    end;
+    scanDevs := LsDiscDevices;
+    WriteLn('dn: ', Length(scanDevs), ' device(s) found');
+    for scanI := 0 to High(scanDevs) do
+      WriteLn('  ', DeviceLabel(scanDevs[scanI]));
+    if LsDiscLastError <> '' then
+      WriteLn('dn: ', LsDiscLastError);
+    LsDiscStop;
+    if Length(scanDevs) > 0 then Halt(0) else Halt(2);
   end;
   { dn --install-path: link the executable into ~/.local/bin and exit.
     Runs before the TUI so the result goes to the plain terminal. }
@@ -2221,7 +2378,11 @@ begin
     begin
       lsErr := '';
       LsSetDeviceName(Opt.LocalSendName);
-      LsStart(ParamStr(0), Opt.LocalSendPort, lsErr);
+      { receiving on: show up in other devices' "Nearby devices" list
+        right away, and answer their announces from now on }
+      LsEnsureIdentity(lsErr);   // before the helper reads it
+      if LsStart(ParamStr(0), Opt.LocalSendPort, lsErr) then
+        LsDiscEnsure(lsErr);
     end;
     idleSecs := 0;
     lastTick := GetTickCount64;
@@ -2250,6 +2411,7 @@ begin
           resets the screen saver timer, so the saver never covers a
           transfer dialog. }
         DrainLsPipe;
+        if LsDiscRunning then LsDiscPoll;
         { a game in play is not idle: the saver must not cover it }
         if LsActive or GameActive then idleSecs := 0;
         { the screen saver counts real seconds of quiet, not ticks }
@@ -2297,6 +2459,7 @@ begin
   HistorySave(CmdHist);
   CmdHist.Free;
   LsStop;
+  LsDiscStop;
   LeftP.Free;
   RightP.Free;
   if ShowPathHint then PathHintShow;

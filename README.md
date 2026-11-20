@@ -294,6 +294,27 @@ title, leave it in the background (it pauses itself). Arrows move/rotate,
 Space drops, P pauses, N starts over after game over, Q/Esc closes it.
 `DN_TETRIS_SEQ=IOTSZJL...` fixes the piece sequence (used by the tests).
 
+## LocalSend
+
+DN exchanges files with [LocalSend](https://localsend.org) devices
+(protocol v2).
+
+- **Send:** select files in a local panel (or put the cursor on one),
+  Tools → LocalSend. The list shows the devices nearby (UDP multicast
+  `224.0.0.167:53317`) and fills in as they answer; the first row takes a
+  `host:port` by hand. The other device asks its user to accept. Devices
+  with Encryption on (HTTPS, the LocalSend default) are reached through
+  `curl`; the certificate must hash to the fingerprint the device
+  announced, as LocalSend itself checks it.
+- **Diagnostics:** `dn --localsend-scan [seconds]` announces, prints every
+  discovery packet and HTTP answer, and lists the devices found.
+- **Receive:** set `localsend_port=53317` (and optionally
+  `localsend_name=...`) in `~/.config/dnfpc/options` and restart DN. DN
+  then shows up in other devices' "Nearby devices"; incoming files are
+  accepted and saved under their own names in the home directory. When
+  the LocalSend app runs on the same machine it owns port 53317: pick
+  another port for DN.
+
 ## Status
 
 Working: dual panels (classic DN look), full mouse support, pull-down

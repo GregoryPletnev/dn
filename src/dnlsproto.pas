@@ -50,6 +50,7 @@ type
   TPrepareResponse = record
     SessionId: AnsiString;
     Accepted: array of AnsiString;   // file ids the receiver will accept
+    Tokens: array of AnsiString;     // upload token per accepted id ('' = none)
   end;
 
   { one event line on the helper <-> main pipe (newline-delimited JSON) }
@@ -63,7 +64,16 @@ type
     BytesDone: Int64;
     BytesTotal: Int64;
     Err: AnsiString;
+    PeerInfo: AnsiString;    // lePeer: the peer's device info JSON
   end;
+
+  { a device seen on the network (multicast announce or /register) }
+  TLsDevice = record
+    Info: TDeviceInfo;
+    Addr: AnsiString;         // IPv4 address the packet came from
+    Seen: QWord;              // GetTickCount64 of the last packet
+  end;
+  TLsDevices = array of TLsDevice;
 
 { --- JSON codec --- }
 
@@ -85,6 +95,30 @@ function BuildDecision(const SessionId: AnsiString; Accept: Boolean): AnsiString
 function BuildEventLine(const Ev: TLsEvent): AnsiString;
 function ParseEventLine(const Line: AnsiString; out Ev: TLsEvent): Boolean;
 
+{ --- discovery (UDP multicast) --- }
+
+{ the multicast DTO: device info plus `announce` (and the v1 spelling
+  `announcement`). Announce = True asks every peer to answer. }
+function BuildAnnounce(const Info: TDeviceInfo; Announce: Boolean): AnsiString;
+function ParseAnnounce(const Json: AnsiString; out Info: TDeviceInfo;
+                       out Announce: Boolean): Boolean;
+
+{ a stable 32-hex-digit device id from Seed (FNV-1a). LocalSend keys its
+  device list and favorites by fingerprint; plain-HTTP devices use a
+  random-looking id instead of a certificate hash. }
+function LsFingerprint(const Seed: AnsiString): AnsiString;
+
+{ add or refresh the device with Info.Fingerprint (or, without one, the
+  same address and port); returns True when the list changed visibly }
+function DevicesUpsert(var List: TLsDevices; const Info: TDeviceInfo;
+                       const Addr: AnsiString; Now: QWord): Boolean;
+
+{ the base the client sends to: "ip:port", "https://ip:port" for HTTPS }
+function DeviceBase(const D: TLsDevice): AnsiString;
+
+{ one picker row: alias, model, address, protocol }
+function DeviceLabel(const D: TLsDevice): AnsiString;
+
 { file type hint from the extension, as LocalSend sends it }
 function FileTypeOf(const FileName: AnsiString): AnsiString;
 
@@ -96,6 +130,124 @@ implementation
 
 uses
   SysUtils, fpjson, jsonparser;
+
+{ --- discovery ----------------------------------------------------------- }
+
+function BuildAnnounce(const Info: TDeviceInfo; Announce: Boolean): AnsiString;
+var
+  d: TJSONData;
+  o: TJSONObject;
+begin
+  d := GetJSON(BuildDeviceInfo(Info));
+  try
+    o := TJSONObject(d);
+    o.Add('download', False);
+    o.Add('announce', Announce);
+    o.Add('announcement', Announce);     // protocol v1 peers
+    Result := o.AsJSON;
+  finally
+    d.Free;
+  end;
+end;
+
+function ParseAnnounce(const Json: AnsiString; out Info: TDeviceInfo;
+                       out Announce: Boolean): Boolean;
+var
+  d: TJSONData;
+  o: TJSONObject;
+begin
+  Announce := False;
+  Result := ParseDeviceInfo(Json, Info) and (Info.Alias <> '');
+  if not Result then Exit;
+  try
+    d := GetJSON(Json);
+  except
+    Exit(False);
+  end;
+  try
+    o := TJSONObject(d);
+    if (o.Find('announce') <> nil) and (o.Find('announce').JSONType = jtBoolean) then
+      Announce := o.Get('announce', False)
+    else if (o.Find('announcement') <> nil) and
+            (o.Find('announcement').JSONType = jtBoolean) then
+      Announce := o.Get('announcement', False);
+  finally
+    d.Free;
+  end;
+  if Info.Port <= 0 then Info.Port := LsDefaultPort;
+  if Info.Protocol = '' then Info.Protocol := 'https';   // the protocol default
+end;
+
+function LsFingerprint(const Seed: AnsiString): AnsiString;
+var
+  h1, h2: QWord;
+  i: Integer;
+begin
+  {$push}{$Q-}{$R-}
+  h1 := QWord($CBF29CE484222325);
+  h2 := QWord($84222325CBF29CE4);
+  for i := 1 to Length(Seed) do
+  begin
+    h1 := (h1 xor Ord(Seed[i])) * QWord($100000001B3);
+    h2 := (h2 xor Ord(Seed[Length(Seed) - i + 1])) * QWord($100000001B3);
+  end;
+  {$pop}
+  Result := IntToHex(h1, 16) + IntToHex(h2, 16);
+end;
+
+function DevicesUpsert(var List: TLsDevices; const Info: TDeviceInfo;
+                       const Addr: AnsiString; Now: QWord): Boolean;
+var
+  i: Integer;
+  same: Boolean;
+begin
+  for i := 0 to High(List) do
+  begin
+    if Info.Fingerprint <> '' then
+      same := List[i].Info.Fingerprint = Info.Fingerprint
+    else
+      same := (List[i].Info.Fingerprint = '') and (List[i].Addr = Addr) and
+              (List[i].Info.Port = Info.Port);
+    if same then
+    begin
+      Result := (List[i].Info.Alias <> Info.Alias) or (List[i].Addr <> Addr) or
+                (List[i].Info.Port <> Info.Port) or
+                (List[i].Info.Protocol <> Info.Protocol) or
+                (List[i].Info.DeviceModel <> Info.DeviceModel);
+      List[i].Info := Info;
+      List[i].Addr := Addr;
+      List[i].Seen := Now;
+      Exit;
+    end;
+  end;
+  SetLength(List, Length(List) + 1);
+  List[High(List)].Info := Info;
+  List[High(List)].Addr := Addr;
+  List[High(List)].Seen := Now;
+  Result := True;
+end;
+
+function DeviceBase(const D: TLsDevice): AnsiString;
+var
+  port: Integer;
+begin
+  port := D.Info.Port;
+  if port <= 0 then port := LsDefaultPort;
+  Result := D.Addr + ':' + IntToStr(port);
+  if D.Info.Protocol = 'https' then
+    Result := 'https://' + Result;
+end;
+
+function DeviceLabel(const D: TLsDevice): AnsiString;
+var
+  model: AnsiString;
+begin
+  model := D.Info.DeviceModel;
+  if model = '' then model := D.Info.DeviceType;
+  Result := Format('%-18s %-10s %-15s %s',
+    [Copy(D.Info.Alias, 1, 18), Copy(model, 1, 10), D.Addr,
+     UpperCase(D.Info.Protocol)]);
+end;
 
 function FileTypeOf(const FileName: AnsiString): AnsiString;
 begin
@@ -297,19 +449,19 @@ end;
 
 function BuildPrepareResponse(const Resp: TPrepareResponse): AnsiString;
 var
-  o, files, f: TJSONObject;
+  o, files: TJSONObject;
   i: Integer;
 begin
   o := TJSONObject.Create;
   try
     o.Add('sessionId', Resp.SessionId);
     files := TJSONObject.Create;
+    { protocol v2: "files": {"<fileId>": "<token>"} }
     for i := 0 to High(Resp.Accepted) do
-    begin
-      f := TJSONObject.Create;
-      f.Add('id', Resp.Accepted[i]);
-      files.Add(Resp.Accepted[i], f);
-    end;
+      if i <= High(Resp.Tokens) then
+        files.Add(Resp.Accepted[i], Resp.Tokens[i])
+      else
+        files.Add(Resp.Accepted[i], Resp.Accepted[i]);
     o.Add('files', files);
     Result := o.AsJSON;
   finally
@@ -327,6 +479,7 @@ begin
   Result := False;
   Resp.SessionId := '';
   SetLength(Resp.Accepted, 0);
+  SetLength(Resp.Tokens, 0);
   try
     d := GetJSON(Json);
   except
@@ -344,6 +497,11 @@ begin
         begin
           SetLength(Resp.Accepted, Length(Resp.Accepted) + 1);
           Resp.Accepted[High(Resp.Accepted)] := fo.Names[i];
+          SetLength(Resp.Tokens, Length(Resp.Accepted));
+          if fo.Items[i].JSONType = jtString then
+            Resp.Tokens[High(Resp.Tokens)] := fo.Items[i].AsString
+          else
+            Resp.Tokens[High(Resp.Tokens)] := '';
         end;
       end;
     Result := True;
@@ -408,6 +566,7 @@ begin
       o.Add('bytesTotal', Ev.BytesTotal);
     end;
     if Ev.Err <> '' then o.Add('err', Ev.Err);
+    if Ev.PeerInfo <> '' then o.Add('peerInfo', Ev.PeerInfo);
     if Length(Ev.Files) > 0 then
     begin
       files := TJSONObject.Create;
@@ -436,7 +595,7 @@ begin
   Result := False;
   Ev.Kind := leError;
   Ev.SessionId := ''; Ev.PeerName := ''; Ev.PeerAddr := '';
-  Ev.Err := ''; Ev.BytesDone := 0; Ev.BytesTotal := 0;
+  Ev.Err := ''; Ev.BytesDone := 0; Ev.BytesTotal := 0; Ev.PeerInfo := '';
   SetLength(Ev.Files, 0);
   if Trim(Line) = '' then Exit;
   try
@@ -452,6 +611,7 @@ begin
     Ev.PeerName := GetStr(o, 'peerName');
     Ev.PeerAddr := GetStr(o, 'peerAddr');
     Ev.Err := GetStr(o, 'err');
+    Ev.PeerInfo := GetStr(o, 'peerInfo');
     if o.Find('bytesDone') <> nil then Ev.BytesDone := o.Get('bytesDone', Int64(0));
     if o.Find('bytesTotal') <> nil then Ev.BytesTotal := o.Get('bytesTotal', Int64(0));
     ParseFiles(o, Ev.Files);

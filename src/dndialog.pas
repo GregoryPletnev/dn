@@ -33,6 +33,20 @@ function HighlightDialog(var Groups: THlGroups): Boolean;
   a letter jumps to the next item starting with it. }
 function ListDialog(const Title: AnsiString; Items: TStrings): Integer;
 
+{ Draw a message box and return at once (no key wait): the screen shows
+  it while the caller does blocking work; the next redraw removes it. }
+procedure InfoBox(const Title, Msg: AnsiString);
+
+type
+  { refills Items while a live list is open; True when they changed }
+  TListRefresh = function(Items: TStrings): Boolean;
+
+{ ListDialog whose items change while it is open: OnRefresh runs every
+  TickMs and after each key. MinW keeps the box from jumping as rows come
+  and go. The cursor stays on the same row index. }
+function LiveListDialog(const Title: AnsiString; Items: TStrings;
+                        OnRefresh: TListRefresh; TickMs, MinW: Integer): Integer;
+
 implementation
 
 uses
@@ -342,9 +356,10 @@ begin
   until False;
 end;
 
-function ListDialog(const Title: AnsiString; Items: TStrings): Integer;
+function LiveListDialog(const Title: AnsiString; Items: TStrings;
+                        OnRefresh: TListRefresh; TickMs, MinW: Integer): Integer;
 var
-  w, h, y, x, i, cur, top, ch, rows: Integer;
+  w, h, y, x, cur, top, ch, rows: Integer;
   me: MEVENT;
 
   procedure Draw;
@@ -367,6 +382,25 @@ var
     refresh;
   end;
 
+  procedure Layout;
+  var
+    j: Integer;
+  begin
+    w := MinW;
+    if w < 30 then w := 30;
+    for j := 0 to Items.Count - 1 do
+      if Utf8Len(Items[j]) + 6 > w then w := Utf8Len(Items[j]) + 6;
+    if w > COLS - 4 then w := COLS - 4;
+    rows := Items.Count;
+    if rows > LINES - 6 then rows := LINES - 6;
+    if rows < 1 then rows := 1;
+    h := rows + 2;
+    y := (LINES - h) div 2;
+    x := (COLS - w) div 2;
+    if cur >= Items.Count then cur := Items.Count - 1;
+    if cur < 0 then cur := 0;
+  end;
+
   procedure Jump(c: Char);
   var
     j, idx: Integer;
@@ -385,21 +419,24 @@ var
 begin
   Result := -1;
   if Items.Count = 0 then Exit;
-  w := 30;
-  for i := 0 to Items.Count - 1 do
-    if Utf8Len(Items[i]) + 6 > w then w := Utf8Len(Items[i]) + 6;
-  if w > COLS - 4 then w := COLS - 4;
-  rows := Items.Count;
-  if rows > LINES - 6 then rows := LINES - 6;
-  h := rows + 2;
-  y := (LINES - h) div 2;
-  x := (COLS - w) div 2;
   cur := 0;
   top := 0;
+  if Assigned(OnRefresh) then timeout(TickMs);
 
   repeat
+    { refresh before drawing, never between a draw and its key: Enter
+      picks the row the user saw }
+    if Assigned(OnRefresh) then
+    begin
+      OnRefresh(Items);
+      timeout(TickMs);      // a nested dialog may have changed it
+    end;
+    if Items.Count = 0 then Exit(-1);
+    Layout;
     if cur < top then top := cur;
     if cur >= top + rows then top := cur - rows + 1;
+    if top > Items.Count - rows then top := Items.Count - rows;
+    if top < 0 then top := 0;
     Draw;
     ch := getch;
     case ch of
@@ -434,6 +471,27 @@ begin
         Jump(Chr(ch));
     end;
   until False;
+end;
+
+procedure InfoBox(const Title, Msg: AnsiString);
+var
+  w, h, y, x: Integer;
+begin
+  w := Utf8Len(Msg) + 6;
+  if w < Length(Title) + 8 then w := Length(Title) + 8;
+  if w > COLS - 4 then w := COLS - 4;
+  h := 3;
+  y := (LINES - h) div 2;
+  x := (COLS - w) div 2;
+  Base;
+  DrawBox(y, x, h, w, Title);
+  PutStr(y + 1, x + 2, Utf8PadRight(' ' + Msg, w - 4), cpMenuBar);
+  refresh;
+end;
+
+function ListDialog(const Title: AnsiString; Items: TStrings): Integer;
+begin
+  Result := LiveListDialog(Title, Items, nil, 0, 0);
 end;
 
 function InputBox(const Title, Prompt: AnsiString;

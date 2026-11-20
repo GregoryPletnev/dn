@@ -49,6 +49,7 @@ type
     procedure OnProgress(SessionId: AnsiString; Done, Total: Int64);
     procedure OnDone(SessionId: AnsiString; Saved: Integer);
     procedure OnError(SessionId, Err: AnsiString);
+    procedure OnPeer(const Info: TDeviceInfo; const Addr: AnsiString);
   end;
 
 { --- helper process: entry point --- }
@@ -83,14 +84,25 @@ function LsTickMs: Integer;
 function LsDeviceName: AnsiString;
 procedure LsSetDeviceName(const Name: AnsiString);
 
-{ send files to a peer; SrcPaths holds local file paths }
+{ this device's id: stable per user and host, the same in the main
+  process and the helper (both compute it) }
+function LsSelfFingerprint: AnsiString;
+
+{ this device as peers see it; Port 0 means "not receiving" (the default
+  port is announced then, a peer's /register to it simply fails) }
+function LsSelfInfo(Port: Integer): TDeviceInfo;
+
+{ send files to a peer; SrcPaths holds local file paths. An "https://"
+  Base goes through curl; PinFp, when set, is the fingerprint the device
+  announced and its certificate must match it. }
 function LsSend(const Base: AnsiString; SrcPaths: TStrings;
-                out Sent: Integer; out Err: AnsiString): Boolean;
+                out Sent: Integer; out Err: AnsiString;
+                const PinFp: AnsiString = ''): Boolean;
 
 implementation
 
 uses
-  SysUtils, Unix, BaseUnix, fphttpserver, httpdefs, fpjson;
+  SysUtils, Unix, BaseUnix, fphttpserver, httpdefs, fpjson, dnlsdisc, dnlsident;
 
 const
   LsTickDefault = 200;
@@ -107,8 +119,32 @@ var
   { helper side }
   HelperPort: Integer = DefPort;
 
+  { main-process side: the port the helper listens on, 0 = not receiving }
+  MainPort: Integer = 0;
+
   { the device name peers see, set by the main process before LsStart }
   DeviceName: AnsiString = 'DN';
+
+function LsSelfFingerprint: AnsiString;
+begin
+  { the certificate's hash, as LocalSend devices identify each other;
+    without a certificate (no openssl) a stable per-user id }
+  Result := LsIdentityFingerprint;
+  if Result = '' then
+    Result := LsFingerprint('dn:' + GetHostName + ':' +
+                            GetEnvironmentVariable('USER') + ':' +
+                            GetEnvironmentVariable('HOME'));
+end;
+function LsSelfInfo(Port: Integer): TDeviceInfo;
+begin
+  Result.Alias := DeviceName;
+  Result.Version := LsProtocolVersion;
+  Result.DeviceModel := 'DN';
+  Result.DeviceType := 'desktop';
+  Result.Fingerprint := LsSelfFingerprint;
+  if Port > 0 then Result.Port := Port else Result.Port := LsDefaultPort;
+  Result.Protocol := 'http';
+end;
 
 function LsDeviceName: AnsiString;
 begin
@@ -230,8 +266,26 @@ begin
   HelperEmit(ev);
 end;
 
+procedure TLsHelperCallbacks.OnPeer(const Info: TDeviceInfo;
+                                    const Addr: AnsiString);
+var
+  ev: TLsEvent;
+begin
+  ev.Kind := lePeer;
+  ev.SessionId := '';
+  ev.PeerName := Info.Alias;
+  ev.PeerAddr := Addr;
+  ev.Err := '';
+  ev.BytesDone := 0;
+  ev.BytesTotal := 0;
+  SetLength(ev.Files, 0);
+  ev.PeerInfo := BuildDeviceInfo(Info);
+  HelperEmit(ev);
+end;
+
 procedure LsHelperMain(Port: Integer; Alias, RecvDir: AnsiString);
 var
+  parent: TPid;
   cb: TLsServerCallbacks;
   hcb: TLsHelperCallbacks;
   err: AnsiString;
@@ -239,6 +293,7 @@ var
 begin
   HelperPort := Port;
   LsSetServerAlias(Alias);
+  LsSetServerFingerprint(LsSelfFingerprint);
   LsSetReceiveDir(RecvDir);
   hcb := TLsHelperCallbacks.Create;
   cb := TLsServerCallbacks.Create;
@@ -246,6 +301,7 @@ begin
   cb.OnProgress := @hcb.OnProgress;
   cb.OnDone := @hcb.OnDone;
   cb.OnError := @hcb.OnError;
+  cb.OnPeer := @hcb.OnPeer;
   if not LsServerStart(Port, cb, err) then
   begin
     ev.Kind := leError;
@@ -269,9 +325,13 @@ begin
   ev.BytesTotal := 0;
   SetLength(ev.Files, 0);
   HelperEmit(ev);
-  { the server runs in its own threads; the main helper thread idles }
-  while True do
-    Sleep(1000);
+  { the server runs in its own threads; the main helper thread watches
+    for the parent: if dn dies without LsStop (killed, crashed), the
+    helper must not live on holding the port }
+  parent := fpGetPPid;
+  while fpGetPPid = parent do
+    Sleep(500);
+  Halt(0);
 end;
 
 { --- main process --- }
@@ -293,7 +353,9 @@ begin
   end;
   cmd := GetEnvironmentVariable('DN_LS_CMD');
   if cmd = '' then
-    cmd := '"' + ExePath + '" --localsend-server ' + IntToStr(Port) +
+    { exec: the helper replaces the shell, so its parent is dn itself
+      (the helper exits when that parent goes away) }
+    cmd := 'exec "' + ExePath + '" --localsend-server ' + IntToStr(Port) +
            ' "' + LsDeviceName + '"';  if fpPipe(pfd) <> 0 then
   begin
     Err := 'cannot create pipe';
@@ -323,6 +385,7 @@ begin
   fpFcntl(pfd[0], F_SETFL, fpFcntl(pfd[0], F_GETFL) or O_NONBLOCK);
   HelperPid := pid;
   HelperOut := pfd[0];
+  MainPort := Port;
   Partial := '';
   SetLength(Sessions, 0);
   Result := True;
@@ -344,6 +407,7 @@ begin
     c_waitpid(HelperPid, st, 0);
   end;
   HelperPid := 0;
+  MainPort := 0;
   HelperOut := -1;
   Partial := '';
   SetLength(Sessions, 0);
@@ -391,7 +455,16 @@ procedure ApplyEvent(const Ev: TLsEvent);
 var
   idx: Integer;
   s: TLsSession;
+  peer: TDeviceInfo;
 begin
+  if Ev.Kind = lePeer then
+  begin
+    { a peer answered our announce over HTTP: into the device list }
+    if ParseDeviceInfo(Ev.PeerInfo, peer) and (peer.Alias <> '') and
+       (Ev.PeerAddr <> '') then
+      LsDiscAdd(peer, Ev.PeerAddr);
+    Exit;
+  end;
   idx := FindSession(Ev.SessionId);
   if idx < 0 then
   begin
@@ -476,7 +549,8 @@ begin
 end;
 
 function LsSend(const Base: AnsiString; SrcPaths: TStrings;
-                out Sent: Integer; out Err: AnsiString): Boolean;
+                out Sent: Integer; out Err: AnsiString;
+                const PinFp: AnsiString): Boolean;
 var
   info: TDeviceInfo;
   files: TFileMetas;
@@ -486,13 +560,9 @@ begin
   Result := False;
   Sent := 0;
   Err := '';
-  info.Alias := 'DN';
-  info.Version := LsProtocolVersion;
-  info.DeviceModel := 'DN - DataNavigator';
-  info.DeviceType := 'desktop';
-  info.Fingerprint := '';
-  info.Port := 0;
-  info.Protocol := 'http';
+  { who we are: the receiving app shows this name and remembers the
+    fingerprint }
+  info := LsSelfInfo(MainPort);
   SetLength(files, SrcPaths.Count);
   for i := 0 to SrcPaths.Count - 1 do
   begin
@@ -509,7 +579,7 @@ begin
     files[i].FileType := FileTypeOf(SrcPaths[i]);
     files[i].Mime := '';
   end;
-  if not LsSendFiles(Base, info, files, nil, Sent, res) then
+  if not LsSendFiles(Base, info, files, nil, Sent, res, PinFp) then
   begin
     Err := res.Err;
     Exit;
