@@ -67,7 +67,7 @@ CHECK_UNITS_AWK = awk -v u="$(1)" ' \
     gsub(/[^a-z0-9_]/, " ", line); \
     n = split(line, w, /[ \t]+/); \
     for (i = 1; i <= n; i++) if (w[i] == u) { found = 1; exit }; \
-    if ($$0 ~ /;/) exit; \
+    if ($$0 ~ /;/) inuses = 0; \
   } \
   END { exit !found }'
 
