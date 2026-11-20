@@ -516,7 +516,7 @@ begin
   {$ifdef darwin}
   if ActionCmd('DN_DISKS_MOUNT_CMD') = '' then
   begin
-    if RunCapture('diskutil mount ' + Q(D.Dev), outp) <> 0 then
+    if RunCapture('diskutil mount ' + Q(D.Dev), outp, 'Mounting', D.Dev) <> 0 then
     begin
       Err := Trim(outp);
       if Err = '' then Err := 'mount failed';
@@ -535,7 +535,8 @@ begin
       Err := 'mounting needs root: run "sudo mount ' + D.Dev + ' <dir>"';
       Exit(False);
     end;
-    if RunCapture('udisksctl mount -b ' + Q(D.Dev), outp) <> 0 then
+    if RunCapture('udisksctl mount -b ' + Q(D.Dev), outp, 'Mounting',
+                  D.Dev) <> 0 then
     begin
       Err := Trim(outp);
       if Err = '' then Err := 'mount failed';
@@ -554,7 +555,8 @@ begin
   {$ifdef darwin}
   if ActionCmd('DN_DISKS_UNMOUNT_CMD') = '' then
   begin
-    Result := RunCapture('diskutil unmount ' + Q(D.Dev), Err) = 0;
+    Result := RunCapture('diskutil unmount ' + Q(D.Dev), Err, 'Unmounting',
+                         D.Dev) = 0;
     if not Result then Err := Trim(Err);
     Exit;
   end;
@@ -567,7 +569,8 @@ begin
       Err := 'unmounting needs root: run "sudo umount ' + D.Mount + '"';
       Exit(False);
     end;
-    Result := RunCapture('udisksctl unmount -b ' + Q(D.Dev), Err) = 0;
+    Result := RunCapture('udisksctl unmount -b ' + Q(D.Dev), Err, 'Unmounting',
+                         D.Dev) = 0;
     if not Result then Err := Trim(Err);
     Exit;
   end;
@@ -580,7 +583,7 @@ begin
   {$ifdef darwin}
   if ActionCmd('DN_DISKS_EJECT_CMD') = '' then
   begin
-    Result := RunCapture('diskutil eject ' + Q(D.Dev), Err) = 0;
+    Result := RunCapture('diskutil eject ' + Q(D.Dev), Err, 'Ejecting', D.Dev) = 0;
     if not Result then Err := Trim(Err);
     Exit;
   end;
@@ -593,7 +596,8 @@ begin
       Err := 'ejecting needs root: run "sudo eject ' + D.Dev + '"';
       Exit(False);
     end;
-    Result := RunCapture('udisksctl power-off -b ' + Q(D.Dev), Err) = 0;
+    Result := RunCapture('udisksctl power-off -b ' + Q(D.Dev), Err, 'Ejecting',
+                         D.Dev) = 0;
     if not Result then Err := Trim(Err);
     Exit;
   end;

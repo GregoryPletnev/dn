@@ -2353,6 +2353,9 @@ begin
   ActiveP := LeftP;
 
   ScrInit;
+  { slow external commands (archives, disk images, sftp) show a progress
+    box with Esc to cancel }
+  RunBusyHook := @BusyBox;
   ApplyPalette(Opt.Palette);
   ApplyHlPairs;
   RedrawBase := @DrawBase;

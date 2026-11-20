@@ -130,7 +130,8 @@ begin
   finally
     L.Free;
   end;
-  Result := RunCapture(BaseCmd + ' -b ' + Q(bf) + ' ' + Q(FTarget), Outp) = 0;
+  Result := RunCapture(BaseCmd + ' -b ' + Q(bf) + ' ' + Q(FTarget), Outp,
+                       'SFTP', FTarget) = 0;
   DeleteFile(bf);
 end;
 

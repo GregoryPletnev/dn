@@ -801,7 +801,7 @@ begin
          ' -w ' + ShellQuote('%{http_code} %{url_effective}') +
          ' ' + ShellQuote(Url);
 
-  rc := RunCapture(cmd, outp);
+  rc := RunCapture(cmd, outp, 'Loading', Url);
   { curl's -w tail is the last line: "<status> <url_effective>" }
   tail := Trim(outp);
   sp := Pos(' ', tail);

@@ -82,6 +82,8 @@ procedure ScrResume;
   Units list dnscreen after ncurses, so these take precedence. }
 function getch: LongInt;
 procedure timeout(delay: LongInt);
+{ the delay the last timeout() set: ms, -1 = blocking }
+function CurrentTimeout: LongInt;
 { Mouse shims. The FPC ncurses binding's mmask_t/MEVENT are built for
   64-bit masks, but the ncurses on this machine uses 32-bit ones: the ABI
   mismatch makes ncurses' own mouse support silently drop every report
@@ -311,6 +313,11 @@ begin
   GpmResume;
   refresh;
   MouseReportsOn;        // after refresh, as in ScrInit
+end;
+
+function CurrentTimeout: LongInt;
+begin
+  Result := InputDelay;
 end;
 
 procedure timeout(delay: LongInt);

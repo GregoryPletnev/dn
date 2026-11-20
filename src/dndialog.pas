@@ -7,7 +7,7 @@ unit dndialog;
 interface
 
 uses
-  Classes, dnoptions;
+  Classes, dnoptions, dnvfs;
 
 { Returns pressed button index, or -1 on Esc. Message lines split by #10. }
 function MsgBox(const Title, Msg: AnsiString;
@@ -46,6 +46,10 @@ type
   and go. The cursor stays on the same row index. }
 function LiveListDialog(const Title: AnsiString; Items: TStrings;
                         OnRefresh: TListRefresh; TickMs, MinW: Integer): Integer;
+
+{ the progress box RunCapture shows for a slow external command: install
+  with RunBusyHook := @BusyBox once the screen is up }
+procedure BusyBox(const Busy: TRunBusy; var Cancel: Boolean);
 
 implementation
 
@@ -471,6 +475,62 @@ begin
         Jump(Chr(ch));
     end;
   until False;
+end;
+
+{ --- progress box for external commands (dnvfs.RunBusyHook) ------------ }
+
+procedure BusyBox(const Busy: TRunBusy; var Cancel: Boolean);
+const
+  W = 56;
+  Seg = 8;                     // the moving block of an unknown-length bar
+var
+  y, x, bw, fill, pos, i, ch, saved: Integer;
+  bar, info, secs: AnsiString;
+begin
+  y := (LINES - 5) div 2;
+  x := (COLS - W) div 2;
+  if x < 0 then x := 0;
+  DrawBox(y, x, 5, W, Busy.Title);
+  PutStr(y + 1, x + 2, Utf8PadRight(' ' + Busy.Detail, W - 4), cpMenuBar);
+
+  bw := W - 6;
+  if Busy.Percent >= 0 then
+  begin
+    fill := (bw * Busy.Percent) div 100;
+    if fill > bw then fill := bw;
+    bar := Rep('█', fill) + Rep('░', bw - fill);
+  end
+  else
+  begin
+    { no percentage: a block sweeps back and forth, one cell per tick }
+    pos := (Busy.ElapsedMs div RunBusyTickMs) mod (2 * (bw - Seg));
+    if pos > bw - Seg then pos := 2 * (bw - Seg) - pos;
+    bar := '';
+    for i := 0 to bw - 1 do
+      if (i >= pos) and (i < pos + Seg) then bar := bar + '█'
+      else bar := bar + '░';
+  end;
+  PutStr(y + 2, x + 3, bar, cpMenuBar);
+
+  secs := IntToStr(Busy.ElapsedMs div 1000) + ' s';
+  info := '';
+  if Busy.Percent >= 0 then
+    info := IntToStr(Busy.Percent) + '%  ';
+  if Busy.CountWhat <> '' then
+    info := info + IntToStr(Busy.Lines) + ' ' + Busy.CountWhat + '  ';
+  info := info + secs;
+  PutStr(y + 3, x + 2, Utf8PadRight(' ' + info, W - 4 - 12) +
+         Utf8PadRight('Esc cancel', 12), cpMenuBar);
+  refresh;
+
+  { Esc cancels; every other key is dropped while the command runs }
+  saved := CurrentTimeout;
+  timeout(0);
+  repeat
+    ch := getch;
+    if ch = 27 then Cancel := True;
+  until ch = ERR;
+  timeout(saved);
 end;
 
 procedure InfoBox(const Title, Msg: AnsiString);

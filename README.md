@@ -173,6 +173,16 @@ Panels browse more than the local disk (ROADMAP M3):
 - **File list panel** (Ctrl+W, DN 2.12): read a text file of paths into a
   virtual listing.
 
+## Slow operations
+
+Opening an archive, mounting a disk image, SFTP, (un)mounting and
+ejecting disks run external tools (bsdtar, zip, hdiutil, diskutil,
+udisksctl, sftp, curl). One that takes longer than 300 ms shows a box
+with the operation, the file, a progress bar (a real percentage when the
+tool reports one, e.g. hdiutil; a moving block otherwise), a counter
+where it means something (archive entries) and the elapsed time. Esc
+stops the tool and everything it started.
+
 ## Command line
 
 Any printable key types into the command line at the bottom; Enter runs

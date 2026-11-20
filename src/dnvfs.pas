@@ -85,8 +85,44 @@ type
 function LocalVFS: TLocalVFS;   // shared singleton
 
 function VfsJoin(const Dir, Name: AnsiString): AnsiString;
-{ run a shell command, capture stdout+stderr; returns exit code }
+{ --- external commands -------------------------------------------------
+
+  Every external tool (bsdtar, zip, hdiutil, diskutil, sftp, curl) runs
+  through RunCapture. The command runs in the background, in a process
+  group of its own with stdin from /dev/null, and RunCapture waits for it
+  in a loop: after RunBusyDelayMs it calls RunBusyHook every
+  RunBusyTickMs, so the UI can show a progress box and offer a cancel.
+  This unit draws nothing: the hook lives in the UI (dndialog). }
+
+type
+  { what the progress box shows about one running command }
+  TRunBusy = record
+    Title: AnsiString;       // 'Reading archive'
+    Detail: AnsiString;      // 'photos.zip'
+    CountWhat: AnsiString;   // 'entries': show the output line count, '' = no
+    Lines: Int64;            // output lines so far
+    Percent: Integer;        // last "PERCENT:n" in the output, -1 = unknown
+    ElapsedMs: QWord;
+  end;
+  { called while a command runs; set Cancel to stop it }
+  TRunBusyHook = procedure(const Busy: TRunBusy; var Cancel: Boolean);
+
+const
+  RunBusyDelayMs = 300;      // quicker commands never show a box
+  RunBusyTickMs = 100;
+  RunCancelledExit = -2;     // RunCapture's result when the user cancelled
+
+var
+  RunBusyHook: TRunBusyHook = nil;
+
+{ run a shell command, capture stdout+stderr; returns exit code, or
+  RunCancelledExit (Output: 'cancelled') when the user stopped it.
+  Title/Detail/CountWhat label the progress box; without them it says
+  "Working" and the program name. }
 function RunCapture(const Cmd: AnsiString; out Output: AnsiString): Integer;
+function RunCapture(const Cmd: AnsiString; out Output: AnsiString;
+                    const Title: AnsiString; const Detail: AnsiString = '';
+                    const CountWhat: AnsiString = ''): Integer;
 { run a shell command with Input on stdin, capture stdout+stderr }
 function RunCaptureInput(const Cmd, Input: AnsiString;
                           out Output: AnsiString): Integer;
@@ -97,7 +133,7 @@ function ParseLsLine(const Line: AnsiString; out Item: TVfsItem;
 implementation
 
 uses
-  SysUtils, DateUtils, {$ifdef unix}Unix,{$endif} dnfileops;
+  SysUtils, DateUtils, {$ifdef unix}Unix, BaseUnix,{$endif} dnfileops;
 
 var
   LocalSingleton: TLocalVFS = nil;
@@ -117,76 +153,220 @@ begin
     Result := Dir + '/' + Name;
 end;
 
-function RunCapture(const Cmd: AnsiString; out Output: AnsiString): Integer;
+{ --- external commands ------------------------------------------------- }
+
+{$ifdef unix}
+function c_setpgid(pid, pgid: LongInt): LongInt; cdecl;
+  external 'c' name 'setpgid';
+{$endif}
+
+function TempName(const Kind, Ext: AnsiString): AnsiString;
+begin
+  Result := GetTempDir + 'dnvfs-' + Kind + IntToStr(GetProcessID) + '-' +
+            IntToStr(Random(1000000)) + Ext;
+end;
+
+function ReadWhole(const Path: AnsiString): AnsiString;
 var
-  tmp: AnsiString;
-  L: TStringList;
+  f: THandle;
+  n: Int64;
+begin
+  Result := '';
+  f := FileOpen(Path, fmOpenRead or fmShareDenyNone);
+  if f = THandle(-1) then Exit;
+  try
+    n := FileSeek(f, Int64(0), 2);
+    FileSeek(f, 0, 0);
+    if n > 0 then
+    begin
+      SetLength(Result, n);
+      if FileRead(f, Result[1], n) <> n then Result := '';
+    end;
+  finally
+    FileClose(f);
+  end;
+end;
+
+{ the program a shell command runs: "bsdtar" for "( bsdtar -xOf ..." }
+function ProgramOf(const Cmd: AnsiString): AnsiString;
+var
+  s: AnsiString;
+  p: Integer;
+begin
+  s := Cmd;
+  p := Pos('&&', s);                         // "cd dir && zip ..."
+  if p > 0 then s := Copy(s, p + 2, Length(s));
+  s := TrimLeft(StringReplace(s, '(', ' ', [rfReplaceAll]));
+  p := Pos(' ', s);
+  if p > 0 then s := Copy(s, 1, p - 1);
+  Result := ExtractFileName(s);
+end;
+
+{ fold the output written since the last look into Busy: count lines,
+  pick up "PERCENT:n" (hdiutil -puppetstrings) }
+procedure ScanOutput(const OutF: AnsiString; var Seen: Int64;
+                     var Busy: TRunBusy);
+var
+  f: THandle;
+  size: Int64;
+  chunk, rest: AnsiString;
+  i, p, e: Integer;
+begin
+  f := FileOpen(OutF, fmOpenRead or fmShareDenyNone);
+  if f = THandle(-1) then Exit;
+  try
+    size := FileSeek(f, Int64(0), 2);
+    if size <= Seen then Exit;
+    FileSeek(f, Seen, 0);
+    { a long listing is read in 64 KiB steps: counted, not kept }
+    while size > Seen do
+    begin
+      if size - Seen > 65536 then SetLength(chunk, 65536)
+      else SetLength(chunk, size - Seen);
+      if FileRead(f, chunk[1], Length(chunk)) <> Length(chunk) then Break;
+      for i := 1 to Length(chunk) do
+        if chunk[i] = #10 then Inc(Busy.Lines);
+      rest := chunk;
+      p := Pos('PERCENT:', rest);
+      while p > 0 do
+      begin
+        Delete(rest, 1, p + 7);
+        e := Pos(#10, rest);
+        if e = 0 then e := Length(rest) + 1;
+        Busy.Percent := Trunc(StrToFloatDef(Trim(Copy(rest, 1, e - 1)),
+                                            Busy.Percent));
+        p := Pos('PERCENT:', rest);
+      end;
+      Inc(Seen, Length(chunk));
+    end;
+  finally
+    FileClose(f);
+  end;
+end;
+
+{ run ShellCmd (its own redirections included) in the background and wait,
+  feeding RunBusyHook; returns the exit code or RunCancelledExit }
+function RunWaiting(const ShellCmd, OutF: AnsiString;
+                    var Busy: TRunBusy): Integer;
+{$ifdef unix}
+var
+  pid, r: TPid;
+  status: cint;
+  start: QWord;
+  seen: Int64;
+  cancel: Boolean;
 begin
   Result := -1;
-  Output := '';
-  tmp := GetTempDir + 'dnvfs-' + IntToStr(GetProcessID) + '-' +
-         IntToStr(Random(1000000)) + '.out';
-  {$ifdef unix}
-  Result := fpSystem(Cmd + ' >' + AnsiQuotedStr(tmp, '''') + ' 2>&1');
-  if (Result and $7F) = 0 then
-    Result := (Result shr 8) and $FF;    // wait status -> exit code
-  {$endif}
-  if FileExists(tmp) then
+  pid := fpFork;
+  if pid < 0 then Exit;
+  if pid = 0 then
   begin
-    L := TStringList.Create;
-    try
-      L.LoadFromFile(tmp);
-      Output := L.Text;
-    finally
-      L.Free;
-    end;
-    DeleteFile(tmp);
+    { own process group: a cancel stops the whole pipeline }
+    c_setpgid(0, 0);
+    fpExecl('/bin/sh', ['-c', ShellCmd]);
+    fpExit(127);
   end;
+  start := GetTickCount64;
+  seen := 0;
+  cancel := False;
+  repeat
+    r := fpWaitPid(pid, status, WNOHANG);
+    if r = pid then Break;
+    if r < 0 then Exit;
+    Busy.ElapsedMs := GetTickCount64 - start;
+    if Assigned(RunBusyHook) and (Busy.ElapsedMs >= RunBusyDelayMs) then
+    begin
+      ScanOutput(OutF, seen, Busy);
+      RunBusyHook(Busy, cancel);
+      if cancel then
+      begin
+        fpKill(-pid, SIGTERM);
+        Sleep(200);
+        fpKill(-pid, SIGKILL);
+        fpWaitPid(pid, status, 0);
+        Exit(RunCancelledExit);
+      end;
+      Sleep(RunBusyTickMs);
+    end
+    else
+      Sleep(10);
+  until False;
+  if WIFEXITED(status) then
+    Result := WEXITSTATUS(status)
+  else
+    Result := 128 + WTERMSIG(status);
+end;
+{$else}
+begin
+  Result := ExecuteProcess('/bin/sh', ['-c', ShellCmd]);
+end;
+{$endif}
+
+function RunLabelled(const Cmd, InF: AnsiString; out Output: AnsiString;
+                     const Title, Detail, CountWhat: AnsiString): Integer;
+var
+  outF, sh: AnsiString;
+  busy: TRunBusy;
+begin
+  Output := '';
+  outF := TempName('out-', '.out');
+  busy.Title := Title;
+  busy.Detail := Detail;
+  if busy.Title = '' then
+  begin
+    busy.Title := 'Working';
+    if busy.Detail = '' then busy.Detail := ProgramOf(Cmd);
+  end;
+  busy.CountWhat := CountWhat;
+  busy.Lines := 0;
+  busy.Percent := -1;
+  busy.ElapsedMs := 0;
+  { the subshell gives the whole command line one redirection; stdin is
+    /dev/null (or InF), so no tool can sit waiting for the terminal }
+  sh := '( ' + Cmd + #10' ) >' + AnsiQuotedStr(outF, '''') + ' 2>&1 <';
+  if InF <> '' then sh := sh + AnsiQuotedStr(InF, '''')
+  else sh := sh + '/dev/null';
+  Result := RunWaiting(sh, outF, busy);
+  if Result = RunCancelledExit then
+    Output := 'cancelled'
+  else
+    Output := ReadWhole(outF);
+  DeleteFile(outF);
+end;
+
+function RunCapture(const Cmd: AnsiString; out Output: AnsiString): Integer;
+begin
+  Result := RunLabelled(Cmd, '', Output, '', '', '');
+end;
+
+function RunCapture(const Cmd: AnsiString; out Output: AnsiString;
+                    const Title: AnsiString; const Detail: AnsiString;
+                    const CountWhat: AnsiString): Integer;
+begin
+  Result := RunLabelled(Cmd, '', Output, Title, Detail, CountWhat);
 end;
 
 function RunCaptureInput(const Cmd, Input: AnsiString;
                           out Output: AnsiString): Integer;
 var
-  inF, outF: AnsiString;
-  L: TStringList;
+  inF: AnsiString;
+  f: THandle;
 begin
   Result := -1;
   Output := '';
-  inF := GetTempDir + 'dnvfs-in-' + IntToStr(GetProcessID) + '-' +
-         IntToStr(Random(1000000)) + '.txt';
-  outF := GetTempDir + 'dnvfs-out-' + IntToStr(GetProcessID) + '-' +
-          IntToStr(Random(1000000)) + '.out';
-  L := TStringList.Create;
+  inF := TempName('in-', '.txt');
+  f := FileCreate(inF);
+  if f = THandle(-1) then Exit;
   try
-    L.Text := Input;
-    try
-      L.SaveToFile(inF);
-    except
-      L.Free;
-      Exit;
-    end;
+    if Length(Input) > 0 then
+      FileWrite(f, Input[1], Length(Input));
   finally
-    L.Free;
+    FileClose(f);
   end;
-  {$ifdef unix}
-  Result := fpSystem(Cmd + ' <' + AnsiQuotedStr(inF, '''') +
-                    ' >' + AnsiQuotedStr(outF, '''') + ' 2>&1');
-  if (Result and $7F) = 0 then
-    Result := (Result shr 8) and $FF;
-  {$endif}
+  Result := RunLabelled(Cmd, inF, Output, '', '', '');
   DeleteFile(inF);
-  if FileExists(outF) then
-  begin
-    L := TStringList.Create;
-    try
-      L.LoadFromFile(outF);
-      Output := L.Text;
-    finally
-      L.Free;
-    end;
-    DeleteFile(outF);
-  end;
 end;
+
 
 function MonthNum(const m: AnsiString): Integer;
 const

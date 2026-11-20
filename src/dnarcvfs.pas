@@ -92,15 +92,20 @@ var
   outp, full: AnsiString;
   L: TStringList;
   it: TVfsItem;
-  i, n: Integer;
+  i, n, rc: Integer;
 begin
   if FLoaded then Exit(FLoadErr = '');
   FLoaded := True;
   FLoadErr := '';
   SetLength(FEntries, 0);
-  if RunCapture('bsdtar -tvf ' + Q(FArchive), outp) <> 0 then
+  rc := RunCapture('bsdtar -tvf ' + Q(FArchive), outp, 'Reading archive',
+                   ExtractFileName(FArchive), 'entries');
+  if rc <> 0 then
   begin
-    FLoadErr := 'bsdtar: cannot read ' + FArchive;
+    if rc = RunCancelledExit then
+      FLoadErr := 'cancelled'
+    else
+      FLoadErr := 'bsdtar: cannot read ' + FArchive;
     Exit(False);
   end;
   L := TStringList.Create;
@@ -190,11 +195,12 @@ begin
   { subshell keeps the inner "> dest" redirect intact — RunCapture appends
     its own stdout redirect to the whole command }
   Result := RunCapture('( bsdtar -xOf ' + Q(FArchive) + ' ' + Q(Path) +
-                       ' > ' + Q(LocalDest) + ' )', outp) = 0;
+                       ' > ' + Q(LocalDest) + ' )', outp, 'Extracting', Path) = 0;
   { bsdtar of some formats stores './name' }
   if not Result then
     Result := RunCapture('( bsdtar -xOf ' + Q(FArchive) + ' ' + Q('./' + Path) +
-                         ' > ' + Q(LocalDest) + ' )', outp) = 0;
+                         ' > ' + Q(LocalDest) + ' )', outp, 'Extracting',
+                         Path) = 0;
   if not Result then
     Err := 'cannot extract ' + Path + ': ' + Trim(outp);
 end;
@@ -212,7 +218,8 @@ begin
   rc := RunCapture('bsdtar -xf ' + Q(FArchive) + ' -C ' + Q(tmp) + ' ' +
                    Q(Path) + ' ' + Q(Path + '/*') + ' 2>/dev/null || ' +
                    'bsdtar -xf ' + Q(FArchive) + ' -C ' + Q(tmp) + ' ' +
-                   Q('./' + Path) + ' ' + Q('./' + Path + '/*'), outp);
+                   Q('./' + Path) + ' ' + Q('./' + Path + '/*'), outp,
+                   'Extracting', Path);
   if (rc <> 0) or not DirectoryExists(tmp + '/' + Path) then
   begin
     Err := 'cannot extract ' + Path;
@@ -241,7 +248,7 @@ begin
   ForceDirectories(dir);
   if not CopyTree(LocalSrc, tmp + '/' + Path, Err) then Exit(False);
   rc := RunCapture('cd ' + Q(tmp) + ' && zip -q ' + Q(FArchive) + ' ' + Q(Path),
-                   outp);
+                   outp, 'Packing', ExtractFileName(FArchive));
   DeleteTree(tmp, outp);
   Result := rc = 0;
   if not Result then Err := 'zip failed: ' + Trim(outp);
@@ -265,7 +272,7 @@ begin
   ForceDirectories(dir);
   if not CopyTree(LocalSrc, tmp + '/' + Path, Err) then Exit(False);
   rc := RunCapture('cd ' + Q(tmp) + ' && zip -qr ' + Q(FArchive) + ' ' + Q(Path),
-                   outp);
+                   outp, 'Packing', ExtractFileName(FArchive));
   DeleteTree(tmp, outp);
   Result := rc = 0;
   if not Result then Err := 'zip failed: ' + Trim(outp);
@@ -284,7 +291,8 @@ begin
   end;
   if IsDir then arg := Q(Path) + ' ' + Q(Path + '/*')
   else arg := Q(Path);
-  Result := RunCapture('zip -qd ' + Q(FArchive) + ' ' + arg, outp) = 0;
+  Result := RunCapture('zip -qd ' + Q(FArchive) + ' ' + arg, outp, 'Deleting',
+                       ExtractFileName(FArchive)) = 0;
   if not Result then Err := 'zip -d failed: ' + Trim(outp);
   FLoaded := False;
 end;

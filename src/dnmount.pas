@@ -80,8 +80,9 @@ begin
   Result := False;
   Vfs := nil;
   Err := '';
-  if RunCapture('hdiutil attach -nobrowse ' + Q(ExpandFileName(ImagePath)),
-                outp) <> 0 then
+  if RunCapture('hdiutil attach -nobrowse -puppetstrings ' +
+                Q(ExpandFileName(ImagePath)), outp, 'Mounting image',
+                ExtractFileName(ImagePath)) <> 0 then
   begin
     Err := Trim(outp);
     if Err = '' then Err := 'hdiutil attach failed';
@@ -126,7 +127,8 @@ var
   outp: AnsiString;
 begin
   if FMount <> '' then
-    RunCapture('hdiutil detach ' + Q(FMount), outp);   // best effort
+    RunCapture('hdiutil detach ' + Q(FMount), outp, 'Unmounting image',
+               ExtractFileName(FMount));   // best effort
   inherited;
 end;
 
