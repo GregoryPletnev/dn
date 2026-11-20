@@ -29,6 +29,16 @@ type
     procedure HandleClick(mx, my: Integer; bstate: QWord); virtual;
     { called before closing; False cancels (e.g. unsaved changes) }
     function ConfirmClose: Boolean; virtual;
+    { a scrollable window reports Pos (first line shown), Total (lines)
+      and Page (lines visible); the frame then shows a scrollbar }
+    function ScrollInfo(out Pos, Total, Page: Integer): Boolean; virtual;
+    { scroll so that line NewPos is the first shown }
+    procedure ScrollTo(NewPos: Integer); virtual;
+    function ScrollbarVisible: Boolean;
+    { the point is on the scrollbar (right frame, between the corners) }
+    function OnScrollbar(mx, my: Integer): Boolean;
+    { arrows: one line; the track above/below the thumb: one page }
+    procedure ClickScrollbar(my: Integer);
     procedure ZoomToggle;
     { keep the window on the desktop; a fixed-size window raises the
       minimum before calling inherited }
@@ -93,6 +103,51 @@ begin
   Result := True;
 end;
 
+function TWin.ScrollInfo(out Pos, Total, Page: Integer): Boolean;
+begin
+  Pos := 0; Total := 0; Page := 0;
+  Result := False;
+end;
+
+procedure TWin.ScrollTo(NewPos: Integer);
+begin
+end;
+
+function TWin.ScrollbarVisible: Boolean;
+var
+  p, t, pg: Integer;
+begin
+  Result := ScrollInfo(p, t, pg) and (t > pg) and (H - 2 >= 4);
+end;
+
+function ThumbAt(Pos, Total, Page, Track: Integer): Integer;
+begin
+  { 1..Track between the arrows, as the panels draw it }
+  if Total - Page <= 0 then Exit(1);
+  if Pos > Total - Page then Pos := Total - Page;
+  if Pos < 0 then Pos := 0;
+  Result := 1 + (Pos * (Track - 1)) div (Total - Page);
+end;
+
+function TWin.OnScrollbar(mx, my: Integer): Boolean;
+begin
+  Result := ScrollbarVisible and (mx = X + W - 1) and (my > Y) and
+            (my < Y + H - 1);
+end;
+
+procedure TWin.ClickScrollbar(my: Integer);
+var
+  p, t, pg, rel, thumb: Integer;
+begin
+  if not ScrollInfo(p, t, pg) then Exit;
+  rel := my - Y - 1;                       // 0 = the up arrow
+  thumb := ThumbAt(p, t, pg, H - 4);
+  if rel = 0 then ScrollTo(p - 1)
+  else if rel = H - 3 then ScrollTo(p + 1)
+  else if rel < thumb then ScrollTo(p - pg)
+  else if rel > thumb then ScrollTo(p + pg);
+end;
+
 procedure TWin.ClampToDesk;
 begin
   if W < MinW then W := MinW;
@@ -140,7 +195,7 @@ end;
 
 procedure TWin.Draw(Focused: Boolean);
 var
-  i: Integer;
+  i, sbPos, sbTotal, sbPage, thumb: Integer;
   tl, tr, bl, br, hh, vv: AnsiString;
   t, st: AnsiString;
 begin
@@ -160,6 +215,17 @@ begin
     PutStr(Y + i, X + W - 1, vv, cpFrame, Focused);
   end;
   PutStr(Y + H - 1, X, bl + Rep(hh, W - 2) + br, cpFrame, Focused);
+
+  { scrollbar in the right frame, drawn like the panels' }
+  if ScrollbarVisible and ScrollInfo(sbPos, sbTotal, sbPage) then
+  begin
+    thumb := ThumbAt(sbPos, sbTotal, sbPage, H - 4);
+    for i := 1 to H - 2 do
+      if i = 1 then PutStr(Y + i, X + W - 1, '▲', cpFrame, Focused)
+      else if i = H - 2 then PutStr(Y + i, X + W - 1, '▼', cpFrame, Focused)
+      else if i - 1 = thumb then PutStr(Y + i, X + W - 1, '■', cpFrame, Focused)
+      else PutStr(Y + i, X + W - 1, '▒', cpFrame, Focused);
+  end;
 
   { icons and title }
   PutStr(Y, X + 2, '[■]', cpFrame, Focused);

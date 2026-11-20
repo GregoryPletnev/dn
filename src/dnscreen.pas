@@ -111,8 +111,18 @@ function Utf8Len(const s: AnsiString): Integer;
 { 1-based byte position of the cpIndex-th codepoint (cpIndex 1-based) }
 function Utf8BytePos(const s: AnsiString; cpIndex: Integer): Integer;
 function Utf8Copy(const s: AnsiString; cpStart, cpCount: Integer): AnsiString;
+{ s cut or padded to exactly w screen columns (wide characters count 2) }
 function Utf8PadRight(const s: AnsiString; w: Integer): AnsiString;
 function Utf8PadLeft(const s: AnsiString; w: Integer): AnsiString;
+{ screen columns of a codepoint: 0 combining, 2 wide (CJK, emoji), else 1 }
+function Utf8CpWidth(Cp: LongWord): Integer;
+{ screen columns of a string }
+function Utf8Width(const s: AnsiString): Integer;
+{ columns startCol.. startCol+cols-1 of s, padded with spaces to cols }
+function Utf8ClipCols(const s: AnsiString; startCol, cols: Integer): AnsiString;
+{ malformed UTF-8, control and C1 characters replaced with '·' (tab and
+  line breaks kept): safe to send to the terminal }
+function Utf8Sanitize(const s: AnsiString): AnsiString;
 
 implementation
 
@@ -742,15 +752,132 @@ begin
   Result := Copy(s, b0, b1 - b0);
 end;
 
-function Utf8PadRight(const s: AnsiString; w: Integer): AnsiString;
+{ --- display width ------------------------------------------------------ }
+
+{ decode one codepoint at s[i]; False (Len = 1) for a malformed sequence }
+function Utf8Decode(const s: AnsiString; i: Integer; out Cp: LongWord;
+                    out Len: Integer): Boolean;
 var
-  l: Integer;
+  b: Byte;
+  k: Integer;
+  minCp: LongWord;
 begin
-  l := Utf8Len(s);
-  if l >= w then
-    Result := Utf8Copy(s, 1, w)
-  else
-    Result := s + StringOfChar(' ', w - l);
+  Result := False;
+  Len := 1;
+  Cp := Ord(s[i]);
+  b := Ord(s[i]);
+  if b < $80 then Exit(True);
+  if (b and $E0) = $C0 then begin Len := 2; Cp := b and $1F; minCp := $80; end
+  else if (b and $F0) = $E0 then begin Len := 3; Cp := b and $0F; minCp := $800; end
+  else if (b and $F8) = $F0 then begin Len := 4; Cp := b and $07; minCp := $10000; end
+  else begin Len := 1; Exit; end;
+  if i + Len - 1 > Length(s) then begin Len := 1; Exit; end;
+  for k := 1 to Len - 1 do
+  begin
+    b := Ord(s[i + k]);
+    if (b and $C0) <> $80 then begin Len := 1; Exit; end;
+    Cp := (Cp shl 6) or (b and $3F);
+  end;
+  if (Cp < minCp) or (Cp > $10FFFF) or ((Cp >= $D800) and (Cp <= $DFFF)) then
+  begin
+    Len := 1;
+    Exit;
+  end;
+  Result := True;
+end;
+
+function Utf8CpWidth(Cp: LongWord): Integer;
+begin
+  { combining marks and zero-width characters take no column }
+  if ((Cp >= $0300) and (Cp <= $036F)) or ((Cp >= $1AB0) and (Cp <= $1AFF)) or
+     ((Cp >= $1DC0) and (Cp <= $1DFF)) or ((Cp >= $20D0) and (Cp <= $20FF)) or
+     ((Cp >= $FE20) and (Cp <= $FE2F)) or ((Cp >= $200B) and (Cp <= $200F)) or
+     (Cp = $FEFF) then
+    Exit(0);
+  { East Asian wide and fullwidth, and the emoji blocks: two columns }
+  if ((Cp >= $1100) and (Cp <= $115F)) or ((Cp >= $2E80) and (Cp <= $303E)) or
+     ((Cp >= $3041) and (Cp <= $33FF)) or ((Cp >= $3400) and (Cp <= $4DBF)) or
+     ((Cp >= $4E00) and (Cp <= $9FFF)) or ((Cp >= $A000) and (Cp <= $A4CF)) or
+     ((Cp >= $AC00) and (Cp <= $D7A3)) or ((Cp >= $F900) and (Cp <= $FAFF)) or
+     ((Cp >= $FE30) and (Cp <= $FE4F)) or ((Cp >= $FF00) and (Cp <= $FF60)) or
+     ((Cp >= $FFE0) and (Cp <= $FFE6)) or ((Cp >= $1F300) and (Cp <= $1F64F)) or
+     ((Cp >= $1F900) and (Cp <= $1F9FF)) or ((Cp >= $20000) and (Cp <= $3FFFD)) then
+    Exit(2);
+  Result := 1;
+end;
+
+function Utf8Sanitize(const s: AnsiString): AnsiString;
+var
+  i, len: Integer;
+  cp: LongWord;
+begin
+  Result := '';
+  i := 1;
+  while i <= Length(s) do
+  begin
+    if not Utf8Decode(s, i, cp, len) then
+      Result := Result + '·'
+    else if (cp < 32) and (cp <> 9) and (cp <> 10) and (cp <> 13) then
+      Result := Result + '·'
+    else if (cp = $7F) or ((cp >= $80) and (cp <= $9F)) then
+      Result := Result + '·'                 // C1 controls: terminal commands
+    else
+      Result := Result + Copy(s, i, len);
+    Inc(i, len);
+  end;
+end;
+
+function Utf8Width(const s: AnsiString): Integer;
+var
+  i, len: Integer;
+  cp: LongWord;
+begin
+  Result := 0;
+  i := 1;
+  while i <= Length(s) do
+  begin
+    if Utf8Decode(s, i, cp, len) then Inc(Result, Utf8CpWidth(cp))
+    else Inc(Result);
+    Inc(i, len);
+  end;
+end;
+
+function Utf8ClipCols(const s: AnsiString; startCol, cols: Integer): AnsiString;
+var
+  i, len, w, col: Integer;
+  cp: LongWord;
+begin
+  Result := '';
+  col := 0;                  // columns placed so far
+  i := 1;
+  { skip startCol columns; a wide char cut in half leaves a space }
+  while (i <= Length(s)) and (startCol > 0) do
+  begin
+    if Utf8Decode(s, i, cp, len) then w := Utf8CpWidth(cp) else w := 1;
+    Inc(i, len);
+    Dec(startCol, w);
+    if startCol < 0 then
+    begin
+      Result := ' ';
+      col := 1;
+      startCol := 0;
+    end;
+  end;
+  while (i <= Length(s)) and (col < cols) do
+  begin
+    if Utf8Decode(s, i, cp, len) then w := Utf8CpWidth(cp) else w := 1;
+    if col + w > cols then Break;
+    Result := Result + Copy(s, i, len);
+    Inc(col, w);
+    Inc(i, len);
+  end;
+  if col < cols then Result := Result + StringOfChar(' ', cols - col);
+end;
+
+function Utf8PadRight(const s: AnsiString; w: Integer): AnsiString;
+begin
+  if w <= 0 then Exit('');
+  Result := Utf8ClipCols(s, 0, w);
 end;
 
 function Utf8PadLeft(const s: AnsiString; w: Integer): AnsiString;

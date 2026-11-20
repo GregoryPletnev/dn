@@ -821,6 +821,24 @@ begin
   {$endif}
 end;
 
+procedure TestWidth;
+begin
+  CheckEq(IntToStr(Utf8Width('abc')), '3', 'width ascii');
+  CheckEq(IntToStr(Utf8Width('漢a')), '3', 'width cjk');
+  CheckEq(IntToStr(Utf8Width('e'#$CC#$81)), '1', 'width combining accent');
+  CheckEq(Utf8PadRight('漢字', 3), '漢 ', 'pad cuts before a wide char');
+  CheckEq(Utf8PadRight('ab', 4), 'ab  ', 'pad ascii');
+  CheckEq(Utf8ClipCols('漢字ab', 1, 3), ' 字', 'clip splits a wide char');
+  CheckEq(Utf8ClipCols('abcdef', 2, 3), 'cde', 'clip ascii');
+  CheckEq(Utf8ClipCols('ab', 5, 3), '   ', 'clip past the end');
+  CheckEq(Utf8Sanitize('a'#$C2#$85'b'), 'a·b', 'sanitize C1 control');
+  CheckEq(Utf8Sanitize('a'#$FF'b'), 'a·b', 'sanitize bad byte');
+  CheckEq(Utf8Sanitize(#$E6#$BC), '··', 'sanitize truncated sequence');
+  CheckEq(Utf8Sanitize(#$C0#$AF), '··', 'sanitize overlong');
+  CheckEq(Utf8Sanitize('ok 漢'#9'x'), 'ok 漢'#9'x', 'sanitize keeps text');
+  CheckEq(Utf8Sanitize('a'#$7F#1), 'a··', 'sanitize DEL and C0');
+end;
+
 procedure TestSha256;
 var
   million: AnsiString;
@@ -2275,6 +2293,7 @@ begin
   TestLsProto;
   TestLsDiscovery;
   TestSha256;
+  TestWidth;
   TestLsIdentity;
   TestHtmlTokenizer;
   TestHtmlTree;

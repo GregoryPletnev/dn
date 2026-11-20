@@ -22,6 +22,8 @@ type
     function StatusText: AnsiString; override;
     function HandleKey(ch: LongInt): TKeyAction; override;
     procedure HandleClick(mx, my: Integer; bstate: QWord); override;
+    function ScrollInfo(out Pos, Total, Page: Integer): Boolean; override;
+    procedure ScrollTo(NewPos: Integer); override;
   end;
 
 { Returns the created window (already added to the desktop), nil on error. }
@@ -161,16 +163,19 @@ begin
   cw := W - 2;
   for j := 0 to H - 3 do
   begin
-    if (Top + j < Content.Count) and Opt.SyntaxHl and HlRules.Valid then
+    { the highlighter counts characters: a line with wide characters
+      (CJK, emoji) is drawn plain, clipped by screen columns }
+    if (Top + j < Content.Count) and Opt.SyntaxHl and HlRules.Valid and
+       (Utf8Width(Content[Top + j]) = Utf8Len(Content[Top + j])) then
       PutHlLine(Y + 1 + j, X + 1, Content[Top + j], Ofs, cw, HlRules, cpViewer,
                 HlStates[Top + j])
     else
     begin
       if Top + j < Content.Count then
-        s := Utf8Copy(Content[Top + j], Ofs + 1, cw)
+        s := Utf8ClipCols(Content[Top + j], Ofs, cw)
       else
-        s := '';
-      PutStr(Y + 1 + j, X + 1, Utf8PadRight(s, cw), cpViewer);
+        s := StringOfChar(' ', cw);
+      PutStr(Y + 1 + j, X + 1, s, cpViewer);
     end;
   end;
 end;
@@ -202,6 +207,21 @@ begin
     Exit(kaPass);
   end;
   Clamp(Top, Ofs, Content.Count, ph);
+end;
+
+function TViewWin.ScrollInfo(out Pos, Total, Page: Integer): Boolean;
+begin
+  Pos := Top;
+  Total := Content.Count;
+  Page := H - 2;
+  Result := True;
+end;
+
+procedure TViewWin.ScrollTo(NewPos: Integer);
+begin
+  Top := NewPos;
+  if Top > Content.Count - (H - 2) then Top := Content.Count - (H - 2);
+  if Top < 0 then Top := 0;
 end;
 
 procedure TViewWin.HandleClick(mx, my: Integer; bstate: QWord);
@@ -249,7 +269,9 @@ begin
   for i := 1 to Length(buf) do
     if (buf[i] < #32) and (buf[i] <> #10) and (buf[i] <> #13) and (buf[i] <> #9) then
       buf[i] := '.';
-  L.Text := StringReplace(buf, #9, '        ', [rfReplaceAll]);
+  { binary files: malformed UTF-8 and C1 controls would move the
+    terminal's cursor or take a different width than counted }
+  L.Text := Utf8Sanitize(StringReplace(buf, #9, '        ', [rfReplaceAll]));
   Result := OpenTextView(ExtractFileName(Path) + ' — ' + Path, L);
   Result.ApplyHlRules(HglForFile(ExtractFileName(Path)));
 end;

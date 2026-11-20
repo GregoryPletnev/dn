@@ -35,6 +35,8 @@ type
     function HandleText(const s: AnsiString): TKeyAction; override;
     procedure InsertText(const t: AnsiString);
     procedure HandleClick(mx, my: Integer; bstate: QWord); override;
+    function ScrollInfo(out Pos, Total, Page: Integer): Boolean; override;
+    procedure ScrollTo(NewPos: Integer); override;
     function ConfirmClose: Boolean; override;
     function Save: Boolean;
     procedure FindNext(FromNext: Boolean);
@@ -343,6 +345,25 @@ function TEditWin.HandleText(const s: AnsiString): TKeyAction;
 begin
   InsertText(s);
   Result := kaConsumed;
+end;
+
+function TEditWin.ScrollInfo(out Pos, Total, Page: Integer): Boolean;
+begin
+  Pos := TopY;
+  Total := Lines.Count;
+  Page := H - 2;
+  Result := True;
+end;
+
+procedure TEditWin.ScrollTo(NewPos: Integer);
+begin
+  TopY := NewPos;
+  if TopY > Lines.Count - (H - 2) then TopY := Lines.Count - (H - 2);
+  if TopY < 0 then TopY := 0;
+  { the drawing scrolls to the cursor: take it along }
+  if CurY < TopY then CurY := TopY;
+  if CurY > TopY + H - 3 then CurY := TopY + H - 3;
+  if CurY > Lines.Count - 1 then CurY := Lines.Count - 1;
 end;
 
 procedure TEditWin.HandleClick(mx, my: Integer; bstate: QWord);

@@ -1901,6 +1901,11 @@ begin
         w.ZoomToggle;
         Exit;
       end;
+      if w.OnScrollbar(me.x, me.y) then
+      begin
+        w.ClickScrollbar(me.y);
+        Exit;
+      end;
       if me.y = w.Y then
       begin
         { grab the title bar: move the window }

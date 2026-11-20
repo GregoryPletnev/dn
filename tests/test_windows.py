@@ -159,3 +159,52 @@ def test_viewer_clips_binary_lines(dn, sandbox):
     assert b > 0, dn.dump()
     assert dn.cell(r + 1, b).data == '║', 'tab line spilled: ' + dn.dump()
     assert dn.cell(r + 2, b).data == '║', 'control line spilled: ' + dn.dump()
+
+
+def test_viewer_keeps_wide_and_broken_utf8_inside(dn, sandbox):
+    # a PDF-like file: C1 controls (they move the cursor in some terminals),
+    # broken UTF-8 and long runs of wide CJK characters
+    with open(sandbox / 'left' / 'mix.dat', 'wb') as f:
+        f.write(b'plain\n')
+        f.write(('漢字' * 60 + '\n').encode())
+        f.write(b'x\xc2\x85y\xff\xfe' * 40 + b'\n')
+        f.write(('a漢b' * 50 + '\n').encode())
+    dn.key('CTRL_R')
+    dn.wait_text('mix.dat')
+    dn.click_on('mix.dat', panel='left')
+    dn.key('F3')
+    dn.wait_text('plain')
+    r = dn.row_of('plain')
+    line = dn.display()[r]
+    b = line.find('║', line.find('plain'))
+    assert b > 0, dn.dump()
+    for k in (1, 2, 3):
+        assert dn.cell(r + k, b).data == '║', \
+            'line %d spilled over the frame:\n%s' % (k, dn.dump())
+
+
+def test_viewer_scrollbar(dn, sandbox):
+    big = sandbox / 'left' / 'long.txt'
+    big.write_text(''.join('line %03d\n' % i for i in range(1, 201)))
+    dn.key('CTRL_R')
+    dn.click_on('long.txt', panel='left')
+    dn.key('F3')
+    dn.wait_text('line 001')
+    r = dn.row_of('line 001')
+    line = dn.display()[r]
+    b = line.find('▲')
+    assert b > 0, 'no scrollbar on the right frame:\n' + dn.dump()
+    col = [dn.cell(row, b).data for row in range(r, r + 30)]
+    assert '■' in col and '▼' in col, dn.dump()
+    down = r + col.index('▼')
+    dn.mouse(b, down)                         # the down arrow: one line
+    dn.wait_gone('line 001')
+    dn.wait_text('line 002')
+    thumb0 = col.index('■')
+    dn.mouse(b, down - 1)                     # the track below the thumb: a page
+    dn.wait_for(lambda s: s.row_of('line 002') is None, desc='paged down')
+    for _ in range(4):                        # one page is under a track cell
+        dn.mouse(b, down - 1)
+    dn.pump(0.2)
+    col2 = [dn.cell(row, b).data for row in range(r, r + 30)]
+    assert col2.index('■') > thumb0, 'the thumb did not move:\n' + dn.dump()
