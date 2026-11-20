@@ -63,7 +63,7 @@ def test_slow_archive_shows_progress_box(slow_sandbox):
 
 @needs_bsdtar
 def test_esc_cancels_a_slow_command(slow_sandbox):
-    s = slow_session(slow_sandbox, 30)
+    s = slow_session(slow_sandbox, '29.7531')   # unique: pgrep finds only ours
     try:
         s.key('ENTER')
         s.wait_text('Reading archive')
@@ -73,7 +73,7 @@ def test_esc_cancels_a_slow_command(slow_sandbox):
         assert time.time() - t0 < 5
         assert s.row_of('f00.txt') is None      # did not enter the archive
         # the whole command was stopped, not only the shell around it
-        out = subprocess.run(['pgrep', '-f', 'sleep 30'],
+        out = subprocess.run(['pgrep', '-f', 'sleep 29.7531'],
                              capture_output=True, text=True).stdout
         assert out.strip() == '', 'the slow command kept running'
         assert s.alive()
