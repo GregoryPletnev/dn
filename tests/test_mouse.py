@@ -54,19 +54,19 @@ def test_single_click_does_not_enter(dn):
 def test_right_click_inverts_selection(dn):
     r = dn.click_on('a.txt', button='right', panel='left')
     c = dn.display()[r].index('a.txt')
-    dn.wait_for(lambda s: s.cell(r, c).fg in ('brown', 'yellow'),
+    dn.wait_for(lambda s: s.cell(r, c).fg in ('brown', 'yellow', 'brightbrown'),
                 desc='right-clicked file becomes selected (yellow)')
     # cursor stays on the file, does not jump down (unlike Insert)
     assert 'a.txt' in dn.cursor_bar_text()
     dn.mouse(c, r, button='right')
-    dn.wait_for(lambda s: s.cell(r, c).fg not in ('brown', 'yellow'),
+    dn.wait_for(lambda s: s.cell(r, c).fg not in ('brown', 'yellow', 'brightbrown'),
                 desc='second right click deselects')
 
 
 def test_right_click_does_not_select_updir(dn):
     r = dn.click_on('>UP--DIR<', button='right', panel='left')
     cell = dn.cell(r, 1)
-    assert cell.fg not in ('brown', 'yellow'), '.. must not be selectable'
+    assert cell.fg not in ('brown', 'yellow', 'brightbrown'), '.. must not be selectable'
     assert dn.alive()
 
 

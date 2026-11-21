@@ -81,12 +81,12 @@ def test_insert_selects_file(dn):
     r = dn.row_of('a.txt')
     c = dn.display()[r].index('a.txt')
     cell = dn.cell(r, c)
-    assert cell.fg in ('brown', 'yellow'), 'selected file should be yellow, got %r' % (cell,)
+    assert cell.fg in ('brown', 'yellow', 'brightbrown'), 'selected file should be yellow, got %r' % (cell,)
     # deselect again
     dn.key('UP')
     dn.key('INSERT')
     cell = dn.cell(r, c)
-    assert cell.fg not in ('brown', 'yellow'), 'file should be deselected, got %r' % (cell,)
+    assert cell.fg not in ('brown', 'yellow', 'brightbrown'), 'file should be deselected, got %r' % (cell,)
 
 
 def test_selection_skips_updir(dn):
@@ -94,7 +94,7 @@ def test_selection_skips_updir(dn):
     dn.key('INSERT')
     r = dn.row_of('>UP--DIR<')
     cell = dn.cell(r, 1)
-    assert cell.fg not in ('brown', 'yellow'), '.. must not be selectable'
+    assert cell.fg not in ('brown', 'yellow', 'brightbrown'), '.. must not be selectable'
 
 
 def test_paging_and_home_end(sandbox):

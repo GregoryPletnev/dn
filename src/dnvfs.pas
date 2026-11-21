@@ -45,6 +45,9 @@ type
     { leaving the VFS root upwards: where to land in the local world.
       False = the root is the top (stay). }
     function ParentExit(out LocalDir, CursorName: AnsiString): Boolean; virtual;
+    { a list worth returning to (the find results): the panel keeps it
+      while a database, archive or image opened from it is shown }
+    function KeepWhenLeft: Boolean; virtual;
   end;
 
   { a virtual panel listing arbitrary local files by full path (Ctrl-W) }
@@ -591,6 +594,11 @@ function TVFS.ParentExit(out LocalDir, CursorName: AnsiString): Boolean;
 begin
   LocalDir := '';
   CursorName := '';
+  Result := False;
+end;
+
+function TVFS.KeepWhenLeft: Boolean;
+begin
   Result := False;
 end;
 

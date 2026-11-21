@@ -90,9 +90,13 @@ function DbQuery(var C: TDbConn; const Sql: AnsiString; MaxRows: Integer;
 function DbHasSchemas(const C: TDbConn): Boolean;
 function DbListSchemas(var C: TDbConn; out Names: TStringArray;
                        out Err: AnsiString): Boolean;
-{ tables and views; Schema is ignored for SQLite }
+{ tables and views; Schema is ignored for SQLite. SQLite keeps no row
+  estimate, so counting the tables is a separate step: a panel listing sets
+  CountRows = False to stay fast on a large database, a caller that needs
+  the sizes sets it True. }
 function DbListObjects(var C: TDbConn; const Schema: AnsiString;
-                       out Objs: TDbObjects; out Err: AnsiString): Boolean;
+                       out Objs: TDbObjects; out Err: AnsiString;
+                       CountRows: Boolean = False): Boolean;
 { the quoted, qualified name for SQL text }
 function DbQualify(const C: TDbConn; const Schema, Name: AnsiString): AnsiString;
 { 'abc' with quotes doubled, for literals }
@@ -590,12 +594,56 @@ begin
     if Length(r.Rows[i]) > 0 then Names[i] := r.Rows[i][0];
 end;
 
+{ SQLite keeps no row estimate, so the tables are counted: one compound
+  SELECT per batch (the engine allows 500 terms in one). Views and virtual
+  tables stay unknown: a view can cost anything, and a virtual table's
+  module may be missing, which would fail the whole batch. A count that
+  fails or is cancelled leaves the rest at -1; the listing itself stands. }
+procedure SqliteCountRows(var C: TDbConn; var Objs: TDbObjects;
+                          const Skip: array of Boolean);
+const
+  Batch = 200;
+var
+  r: TDbResult;
+  sql, err: AnsiString;
+  i, j, n, idx: Integer;
+begin
+  i := 0;
+  while i <= High(Objs) do
+  begin
+    sql := '';
+    n := 0;
+    while (i <= High(Objs)) and (n < Batch) do
+    begin
+      if (Objs[i].Kind = 'table') and not Skip[i] then
+      begin
+        if sql <> '' then sql := sql + ' UNION ALL ';
+        sql := sql + 'SELECT ' + IntToStr(i) + ', count(*) FROM ' +
+               QuoteIdent(C, Objs[i].Name);
+        Inc(n);
+      end;
+      Inc(i);
+    end;
+    if sql = '' then Exit;
+    if not DbQuery(C, sql + ';', 0, r, err, 'Counting rows') then Exit;
+    for j := 0 to High(r.Rows) do
+    begin
+      if Length(r.Rows[j]) < 2 then Continue;
+      idx := StrToIntDef(r.Rows[j][0], -1);
+      if (idx >= 0) and (idx <= High(Objs)) then
+        Objs[idx].Rows := StrToInt64Def(r.Rows[j][1], -1);
+    end;
+  end;
+end;
+
 function DbListObjects(var C: TDbConn; const Schema: AnsiString;
-                       out Objs: TDbObjects; out Err: AnsiString): Boolean;
+                       out Objs: TDbObjects; out Err: AnsiString;
+                       CountRows: Boolean): Boolean;
 var
   r: TDbResult;
   sql: AnsiString;
   i: Integer;
+  virt: array of Boolean;
 begin
   SetLength(Objs, 0);
   case C.Kind of
@@ -611,13 +659,15 @@ begin
       sql := 'SELECT name, lower(engine), ifNull(total_rows, -1) FROM system.tables ' +
              'WHERE database = ' + DbLiteral(Schema) + ' ORDER BY name';
     dbSqlite:
-      sql := 'SELECT name, type, -1 FROM sqlite_master WHERE type IN ' +
+      sql := 'SELECT name, type, -1, sql LIKE ''CREATE VIRTUAL%'' ' +
+             'FROM sqlite_master WHERE type IN ' +
              '(''table'', ''view'') AND name NOT LIKE ''sqlite\_%'' ESCAPE ''\'' ' +
              'ORDER BY name;';
   end;
   Result := DbQuery(C, sql, 0, r, Err, 'Reading tables');
   if not Result then Exit;
   SetLength(Objs, Length(r.Rows));
+  SetLength(virt, Length(r.Rows));
   for i := 0 to High(r.Rows) do
   begin
     Objs[i].Name := '';
@@ -627,7 +677,11 @@ begin
     if Length(r.Rows[i]) > 1 then Objs[i].Kind := r.Rows[i][1];
     if Length(r.Rows[i]) > 2 then
       Objs[i].Rows := StrToInt64Def(r.Rows[i][2], -1);
+    virt[i] := (Length(r.Rows[i]) > 3) and (r.Rows[i][3] = '1');
   end;
+  { a full count(*) scan is opt-in: a panel listing over a large SQLite
+    file must not hang for seconds, the size stays unknown there }
+  if CountRows and (C.Kind = dbSqlite) then SqliteCountRows(C, Objs, virt);
 end;
 
 function DbExportCsv(var C: TDbConn; const Schema, Name, LocalDest: AnsiString;

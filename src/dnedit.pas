@@ -134,7 +134,7 @@ begin
   for j := 0 to chh - 1 do
   begin
     if (TopY + j < Lines.Count) and Opt.SyntaxHl and HlRules.Valid then
-      PutHlLine(Y + 1 + j, X + 1, Lines[TopY + j], LeftX, cw, HlRules, cpViewer,
+      PutHlLine(Y + 1 + j, X + 1, Lines[TopY + j], LeftX, cw, HlRules, cpEditor,
                 HlStates[TopY + j])
     else
     begin
@@ -142,7 +142,7 @@ begin
         s := Utf8Copy(Lines[TopY + j], LeftX + 1, cw)
       else
         s := '';
-      PutStr(Y + 1 + j, X + 1, Utf8PadRight(s, cw), cpViewer);
+      PutStr(Y + 1 + j, X + 1, Utf8PadRight(s, cw), cpEditor);
     end;
   end;
 

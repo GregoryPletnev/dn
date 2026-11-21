@@ -76,25 +76,25 @@ def test_select_by_mask(dnp):
     dnp.key('ENTER')
     r = dnp.row_of('a.txt')
     c = dnp.display()[r].index('a.txt')
-    dnp.wait_for(lambda s: s.cell(r, c).fg in ('brown', 'yellow'),
+    dnp.wait_for(lambda s: s.cell(r, c).fg in ('brown', 'yellow', 'brightbrown'),
                  desc='a.txt selected by mask')
     rl = dnp.row_of('zz.log')
-    assert dnp.cell(rl, 1).fg not in ('brown', 'yellow'), 'log not selected'
+    assert dnp.cell(rl, 1).fg not in ('brown', 'yellow', 'brightbrown'), 'log not selected'
     # '-' deselects
     dnp.send('-')
     dnp.wait_text('Mask:')
     dnp.key('ENTER')                    # same mask kept
-    dnp.wait_for(lambda s: s.cell(r, c).fg not in ('brown', 'yellow'),
+    dnp.wait_for(lambda s: s.cell(r, c).fg not in ('brown', 'yellow', 'brightbrown'),
                  desc='deselected by mask')
 
 
 def test_invert_all(dnp):
     dnp.send('*')
     r = dnp.row_of('zz.log')
-    dnp.wait_for(lambda s: s.cell(r, 1).fg in ('brown', 'yellow'),
+    dnp.wait_for(lambda s: s.cell(r, 1).fg in ('brown', 'yellow', 'brightbrown'),
                  desc='* inverted: files selected')
     ra = dnp.row_of('alpha')
-    assert dnp.cell(ra, 1).fg not in ('brown', 'yellow'), 'dirs untouched'
+    assert dnp.cell(ra, 1).fg not in ('brown', 'yellow', 'brightbrown'), 'dirs untouched'
 
 
 def test_quick_jump_alt_letter(dnp):
@@ -128,10 +128,10 @@ def test_ctrl_c_compare_dirs(dnp, sandbox):
     dnp.key('CTRL_R')
     dnp.send('\x03')                    # Ctrl-C compare
     r = dnp.row_of('b.txt')
-    dnp.wait_for(lambda s: s.cell(r, 1).fg in ('brown', 'yellow'),
+    dnp.wait_for(lambda s: s.cell(r, 1).fg in ('brown', 'yellow', 'brightbrown'),
                  desc='b.txt differs -> selected')
     ra = dnp.row_of('a.txt')
-    assert dnp.cell(ra, 1).fg not in ('brown', 'yellow'), \
+    assert dnp.cell(ra, 1).fg not in ('brown', 'yellow', 'brightbrown'), \
         'a.txt equal on both sides -> not selected'
     # right panel: r.txt differs
     rr = None
@@ -139,4 +139,4 @@ def test_ctrl_c_compare_dirs(dnp, sandbox):
         if 'r.txt' in l[40:]:
             rr = i
             break
-    assert rr and dnp.cell(rr, 41).fg in ('brown', 'yellow'), dnp.dump()
+    assert rr and dnp.cell(rr, 41).fg in ('brown', 'yellow', 'brightbrown'), dnp.dump()

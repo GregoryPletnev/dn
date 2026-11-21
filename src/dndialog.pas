@@ -35,7 +35,8 @@ function HighlightDialog(var Groups: THlGroups): Boolean;
 { Modal list picker: arrows/digits/letters navigate, Enter picks, Esc
   cancels. Returns the chosen index or -1. A digit jumps to item 1..9;
   a letter jumps to the next item starting with it. }
-function ListDialog(const Title: AnsiString; Items: TStrings): Integer;
+function ListDialog(const Title: AnsiString; Items: TStrings;
+                    StartCur: Integer = 0): Integer;
 
 { A list with action keys: arrows/mouse move the cursor, a key from Keys
   (10 = Enter, a double click is Enter) ends the dialog with Result True,
@@ -81,11 +82,25 @@ type
   { refills Items while a live list is open; True when they changed }
   TListRefresh = function(Items: TStrings): Boolean;
 
+  { draws one preview frame into the inner rectangle (py,px,ph,pw) of a
+    preview pane; called with the focused row Cur and every tick/repaint }
+  TListPreview = procedure(Cur: Integer; py, px, ph, pw: Integer);
+
 { ListDialog whose items change while it is open: OnRefresh runs every
   TickMs and after each key. MinW keeps the box from jumping as rows come
-  and go. The cursor stays on the same row index. }
+  and go. The cursor stays on the same row index. When OnPreview is set,
+  a preview pane PreviewW wide opens to the right of the list and OnPreview
+  paints the focused row into it. When FootLabel is set, a numeric field
+  with that label is drawn under the list; Tab moves the focus between the
+  list and the field, digits edit it, and the result returns in FootValue
+  (no nested dialog). }
 function LiveListDialog(const Title: AnsiString; Items: TStrings;
-                        OnRefresh: TListRefresh; TickMs, MinW: Integer): Integer;
+                        OnRefresh: TListRefresh; TickMs, MinW: Integer;
+                        StartCur: Integer = 0;
+                        OnPreview: TListPreview = nil;
+                        PreviewW: Integer = 0;
+                        const FootLabel: AnsiString = '';
+                        FootValue: PInteger = nil): Integer;
 
 { the progress box RunCapture shows for a slow external command: install
   with RunBusyHook := @BusyBox once the screen is up }
@@ -115,20 +130,48 @@ begin
   L.Text := Msg;
 end;
 
+{ break every line wider than Cols: at the last space when there is one
+  in the second half, else hard }
+procedure WrapLines(L: TStringList; Cols: Integer);
+var
+  i, cut, k: Integer;
+  s: AnsiString;
+begin
+  if Cols < 8 then Exit;
+  i := 0;
+  while i < L.Count do
+  begin
+    s := L[i];
+    if Utf8Width(s) > Cols then
+    begin
+      cut := Cols;
+      for k := Cols downto Cols div 2 do
+        if Utf8Copy(s, k, 1) = ' ' then
+        begin
+          cut := k;
+          Break;
+        end;
+      L[i] := TrimRight(Utf8Copy(s, 1, cut));
+      L.Insert(i + 1, TrimLeft(Utf8Copy(s, cut + 1, MaxInt)));
+    end;
+    Inc(i);
+  end;
+end;
+
 procedure DrawBox(y, x, h, w: Integer; const Title: AnsiString);
 var
   i: Integer;
 begin
-  PutStr(y, x, bxSTL + Rep(bxSepH, w - 2) + bxSTR, cpMenuBar);
+  PutStr(y, x, bxSTL + Rep(bxSepH, w - 2) + bxSTR, cpDlgFrame);
   for i := 1 to h - 2 do
   begin
-    PutStr(y + i, x, bxColV, cpMenuBar);
-    PutStr(y + i, x + 1, StringOfChar(' ', w - 2), cpMenuBar);
-    PutStr(y + i, x + w - 1, bxColV, cpMenuBar);
+    PutStr(y + i, x, bxColV, cpDlgFrame);
+    PutStr(y + i, x + 1, StringOfChar(' ', w - 2), cpDialog);
+    PutStr(y + i, x + w - 1, bxColV, cpDlgFrame);
   end;
-  PutStr(y + h - 1, x, bxSBL + Rep(bxSepH, w - 2) + bxSBR, cpMenuBar);
+  PutStr(y + h - 1, x, bxSBL + Rep(bxSepH, w - 2) + bxSBR, cpDlgFrame);
   if Title <> '' then
-    PutStr(y, x + (w - Length(Title) - 2) div 2, ' ' + Title + ' ', cpMenuBar);
+    PutStr(y, x + (w - Length(Title) - 2) div 2, ' ' + Title + ' ', cpDlgFrame);
 end;
 
 function MsgBox(const Title, Msg: AnsiString;
@@ -147,7 +190,7 @@ var
     Base;
     DrawBox(y, x, h, w, Title);
     for j := 0 to L.Count - 1 do
-      PutStr(y + 1 + j, x + 2, L[j], cpMenuBar);
+      PutStr(y + 1 + j, x + 2, L[j], cpDialog);
     cx := bx;
     SetLength(btnX, Length(Buttons));
     for j := 0 to High(Buttons) do
@@ -155,9 +198,9 @@ var
       cap := '[ ' + Buttons[j] + ' ]';
       btnX[j] := cx;
       if j = focus then
-        PutStr(by, cx, cap, cpMenuSel)
+        PutStr(by, cx, cap, cpDlgBtnSel)
       else
-        PutStr(by, cx, cap, cpMenuBar);
+        PutStr(by, cx, cap, cpDialog);
       cx := cx + Length(cap) + 2;
     end;
     refresh;
@@ -178,6 +221,7 @@ begin
       bw := bw + Length(Buttons[i]) + 6;
     if bw + 2 > w then w := bw + 2;
     if w > COLS - 4 then w := COLS - 4;
+    WrapLines(L, w - 4);
     h := L.Count + 4;
     y := (LINES - h) div 2;
     x := (COLS - w) div 2;
@@ -195,7 +239,7 @@ begin
         10, 13, KEY_ENTER: Exit(focus);
         27: Exit(-1);
         KEY_MOUSE:
-          if getmouse(@me) = OK then
+          if (getmouse(@me) = OK) and not MouseIsRelease then
             if ((me.bstate and (mbtn1Clicked or mbtn1Pressed or mbtn1Double)) <> 0)
                and (me.y = by) then
               for j := 0 to High(Buttons) do
@@ -231,13 +275,13 @@ var
     for j := 0 to High(Items) do
     begin
       if tmp[j] then mark := '[X] ' else mark := '[ ] ';
-      if (focus = 0) and (j = cur) then pair := cpMenuSel else pair := cpMenuBar;
+      if (focus = 0) and (j = cur) then pair := cpDlgSel else pair := cpDlgList;
       PutStr(y + 1 + j, x + 2, PadRight(mark + Items[j], w - 4), pair);
     end;
-    if focus = 1 then PutStr(by, okX, '[ OK ]', cpMenuSel)
-    else PutStr(by, okX, '[ OK ]', cpMenuBar);
-    if focus = 2 then PutStr(by, cancelX, '[ Cancel ]', cpMenuSel)
-    else PutStr(by, cancelX, '[ Cancel ]', cpMenuBar);
+    if focus = 1 then PutStr(by, okX, '[ OK ]', cpDlgBtnSel)
+    else PutStr(by, okX, '[ OK ]', cpDialog);
+    if focus = 2 then PutStr(by, cancelX, '[ Cancel ]', cpDlgBtnSel)
+    else PutStr(by, cancelX, '[ Cancel ]', cpDialog);
     refresh;
   end;
 
@@ -326,16 +370,16 @@ var
     DrawBox(y, x, h, w, 'Highlight groups');
     for j := 1 to HlGroupCount do
     begin
-      if (focus = 0) and (j - 1 = cur) then pair := cpMenuSel else pair := cpMenuBar;
+      if (focus = 0) and (j - 1 = cur) then pair := cpDlgSel else pair := cpDlgList;
       row := PadRight(HlColorNames[tmp[j].Color], 9) + tmp[j].Mask;
       PutStr(y + j, x + 2, PadRight(row, w - 4), pair);
     end;
     PutStr(y + HlGroupCount + 1, x + 2,
-           PadRight(' Space = color, Enter = edit masks', w - 4), cpMenuBar);
-    if focus = 1 then PutStr(by, okX, '[ OK ]', cpMenuSel)
-    else PutStr(by, okX, '[ OK ]', cpMenuBar);
-    if focus = 2 then PutStr(by, cancelX, '[ Cancel ]', cpMenuSel)
-    else PutStr(by, cancelX, '[ Cancel ]', cpMenuBar);
+           PadRight(' Space = color, Enter = edit masks', w - 4), cpDialog);
+    if focus = 1 then PutStr(by, okX, '[ OK ]', cpDlgBtnSel)
+    else PutStr(by, okX, '[ OK ]', cpDialog);
+    if focus = 2 then PutStr(by, cancelX, '[ Cancel ]', cpDlgBtnSel)
+    else PutStr(by, cancelX, '[ Cancel ]', cpDialog);
     refresh;
   end;
 
@@ -410,14 +454,32 @@ begin
 end;
 
 function LiveListDialog(const Title: AnsiString; Items: TStrings;
-                        OnRefresh: TListRefresh; TickMs, MinW: Integer): Integer;
+                        OnRefresh: TListRefresh; TickMs, MinW: Integer;
+                        StartCur: Integer; OnPreview: TListPreview;
+                        PreviewW: Integer; const FootLabel: AnsiString;
+                        FootValue: PInteger): Integer;
 var
   w, h, y, x, cur, top, ch, rows: Integer;
+  listW, pvW, pvX, pvY, pvH, pvInnerW: Integer;
+  footRow, footVal, footFocus, footEdit, fw, cx, k: Integer;
+  footText: AnsiString;
+  footBtns: array[0..1] of AnsiString;
   me: MEVENT;
+
+  function HasFoot: Boolean;
+  begin
+    Result := (FootLabel <> '') and (FootValue <> nil);
+  end;
+
+  function FootCell: AnsiString;
+  begin
+    Result := FootLabel + ' ' + footText;
+  end;
 
   procedure Draw;
   var
-    j, idx, pair: Integer;
+    j, idx, pair, fx, kk: Integer;
+    s: AnsiString;
   begin
     Base;
     DrawBox(y, x, h, w, Title);
@@ -426,11 +488,39 @@ var
       idx := top + j;
       if idx >= Items.Count then
       begin
-        PutStr(y + 1 + j, x + 2, StringOfChar(' ', w - 4), cpMenuBar);
+        PutStr(y + 1 + j, x + 2, StringOfChar(' ', listW - 4), cpDlgList);
         Continue;
       end;
-      if idx = cur then pair := cpMenuSel else pair := cpMenuBar;
-      PutStr(y + 1 + j, x + 2, Utf8PadRight(' ' + Items[idx] + ' ', w - 4), pair);
+      if (idx = cur) and (footFocus = 0) then pair := cpDlgSel
+      else pair := cpDlgList;
+      PutStr(y + 1 + j, x + 2, Utf8PadRight(' ' + Items[idx] + ' ', listW - 4), pair);
+    end;
+    if Assigned(OnPreview) and (pvW > 0) then
+    begin
+      DrawBox(pvY, pvX, pvH, pvW, '');
+      OnPreview(cur, pvY + 1, pvX + 1, pvH - 2, pvInnerW);
+    end;
+    if HasFoot then
+    begin
+      { the numeric field looks like an input: label, then an underlined
+        value box with a visible caret cell }
+      PutStr(footRow, x + 2, Utf8PadRight(' ' + FootLabel, listW - 4),
+             cpDialog);
+      fx := x + 2 + Utf8Width(FootLabel) + 2;
+      fw := listW - 4 - (Utf8Width(FootLabel) + 2);
+      if fw < 4 then fw := 4;
+      if footFocus = 1 then pair := cpDlgSel else pair := cpInput;
+      PutStr(footRow, fx, Utf8PadRight(' ' + footText, fw), pair);
+      if footFocus = 1 then
+        PutStr(footRow, fx + 1 + footEdit, ' ', cpCursor);
+      { the dialog buttons: [ OK ] [ Cancel ] }
+      cx := x + 2;
+      for kk := 0 to High(footBtns) do
+      begin
+        if footFocus = 2 + kk then pair := cpDlgBtnSel else pair := cpDialog;
+        PutStr(footRow + 1, cx, '[ ' + footBtns[kk] + ' ]', pair);
+        Inc(cx, Length(footBtns[kk]) + 6);
+      end;
     end;
     refresh;
   end;
@@ -439,17 +529,56 @@ var
   var
     j: Integer;
   begin
-    w := MinW;
-    if w < 30 then w := 30;
+    listW := MinW;
+    if listW < 24 then listW := 24;
     for j := 0 to Items.Count - 1 do
-      if Utf8Len(Items[j]) + 6 > w then w := Utf8Len(Items[j]) + 6;
-    if w > COLS - 4 then w := COLS - 4;
+      if Utf8Len(Items[j]) + 6 > listW then listW := Utf8Len(Items[j]) + 6;
+    { the field row needs room for the label, a value and the cursor }
+    if HasFoot and (Utf8Width(FootLabel) + 12 > listW) then
+      listW := Utf8Width(FootLabel) + 12;
+    if listW > COLS - 4 then listW := COLS - 4;
     rows := Items.Count;
-    if rows > LINES - 6 then rows := LINES - 6;
+    if rows > LINES - 9 then rows := LINES - 9;
     if rows < 1 then rows := 1;
     h := rows + 2;
+    if HasFoot then Inc(h, 2);         // the field row and the button row
+    pvW := 0;
+    pvH := 0;
+    if Assigned(OnPreview) then
+    begin
+      { the preview pane needs real room: it takes PreviewW columns, but
+        shrinks to whatever is left beside the list, and is dropped only
+        when fewer than 16 columns remain }
+      pvW := PreviewW;
+      if pvW < 20 then pvW := 20;
+      if listW + pvW + 3 > COLS - 4 then
+        pvW := COLS - 4 - listW - 3;
+      if pvW < 16 then pvW := 0;
+    end;
+    if pvW > 0 then
+    begin
+      w := listW + pvW + 3;
+      pvH := h - 2;
+      if HasFoot then Dec(pvH, 2);     // the field and button rows sit under
+      if pvH > 12 then pvH := 12;
+      if pvH < 4 then pvH := 4;
+      if pvH + 2 > h then h := pvH + 2;
+      if HasFoot and (h < rows + 4) then h := rows + 4;
+      pvX := x + listW + 2;
+      pvY := y + 1;
+      pvInnerW := pvW - 2;
+    end
+    else
+      w := listW;
+    if w > COLS - 4 then w := COLS - 4;
     y := (LINES - h) div 2;
     x := (COLS - w) div 2;
+    if pvW > 0 then
+    begin
+      pvX := x + listW + 2;
+      pvY := y + 1;
+    end;
+    footRow := y + h - 3;
     if cur >= Items.Count then cur := Items.Count - 1;
     if cur < 0 then cur := 0;
   end;
@@ -472,9 +601,22 @@ var
 begin
   Result := -1;
   if Items.Count = 0 then Exit;
-  cur := 0;
+  cur := StartCur;
+  if (cur < 0) or (cur >= Items.Count) then cur := 0;
   top := 0;
-  if Assigned(OnRefresh) then timeout(TickMs);
+  footFocus := 0;
+  footEdit := 0;
+  footBtns[0] := 'OK';
+  footBtns[1] := 'Cancel';
+  if HasFoot then
+  begin
+    footVal := FootValue^;
+    if footVal < 0 then footVal := 0;
+    footText := IntToStr(footVal);
+  end;
+  { the tick drives both a live list and a live preview: without a timeout
+    a preview-only dialog would repaint only on a key }
+  if Assigned(OnRefresh) or Assigned(OnPreview) then timeout(TickMs);
 
   repeat
     { refresh before drawing, never between a draw and its key: Enter
@@ -492,29 +634,128 @@ begin
     if top < 0 then top := 0;
     Draw;
     ch := getch;
-    case ch of
-      ERR: ;
-      10, 13, KEY_ENTER: Exit(cur);
-      27: Exit(-1);
-      KEY_UP: cur := (cur + Items.Count - 1) mod Items.Count;
-      KEY_DOWN: cur := (cur + 1) mod Items.Count;
-      KEY_HOME: cur := 0;
-      KEY_END: cur := Items.Count - 1;
-      KEY_MOUSE:
-        if getmouse(@me) = OK then
-          if (me.bstate and (mbtn1Clicked or mbtn1Pressed or mbtn1Double)) <> 0 then
+    { a mouse click is handled the same at any focus: on the field it
+      focuses and edits, on a button it accepts or cancels }
+    if (ch = KEY_MOUSE) and (getmouse(@me) = OK) and
+       ((me.bstate and (mbtn1Clicked or mbtn1Pressed or mbtn1Double)) <> 0) then
+    begin
+      { a click on a list row selects it (and picks it without a preview) }
+      if (me.y >= y + 1) and (me.y < y + 1 + rows) and
+         (me.x >= x) and (me.x < x + listW) and
+         (top + me.y - (y + 1) < Items.Count) then
+      begin
+        cur := top + me.y - (y + 1);
+        footFocus := 0;
+        if (me.bstate and mbtn1Double) <> 0 then Exit(cur);
+        if Assigned(OnPreview) then
+        begin
+          Layout;
+          if cur < top then top := cur;
+          if cur >= top + rows then top := cur - rows + 1;
+          Draw;
+          Continue;
+        end;
+        Exit(cur);
+      end
+      else if HasFoot and (me.y = footRow) and
+              (me.x >= x + 2) and (me.x < x + listW - 2) then
+      begin
+        footFocus := 1;
+        footEdit := Length(footText);
+      end
+      else if (Assigned(OnPreview)) and (pvW > 0) and
+              (me.y >= pvY) and (me.y < pvY + pvH) and
+              (me.x >= pvX) and (me.x < pvX + pvW) then
+        { a click in the preview pane: keep the dialog open }
+      else if HasFoot and (me.y = footRow + 1) then
+      begin
+        cx := x + 2;
+        for k := 0 to High(footBtns) do
+        begin
+          if (me.x >= cx) and (me.x < cx + Length(footBtns[k]) + 4) then
           begin
-            if (me.y >= y + 1) and (me.y < y + 1 + rows) and
-               (me.x >= x + 1) and (me.x < x + w - 1) and
-               (top + me.y - (y + 1) < Items.Count) then
+            if k = 0 then
             begin
-              cur := top + me.y - (y + 1);
-              if (me.bstate and mbtn1Double) <> 0 then Exit(cur);
+              footVal := StrToIntDef(footText, footVal);
+              FootValue^ := footVal;
               Exit(cur);
             end
             else
               Exit(-1);
           end;
+          Inc(cx, Length(footBtns[k]) + 6);
+        end;
+        Exit(-1);
+      end;
+      Continue;
+    end;
+    if HasFoot and (footFocus = 1) then
+    begin
+      case ch of
+        ERR: ;
+        10, 13, KEY_ENTER:
+          begin
+            footVal := StrToIntDef(footText, footVal);
+            FootValue^ := footVal;
+            Exit(cur);
+          end;
+        27: Exit(-1);
+        9: footFocus := 2;              // Tab: to the buttons
+        8, 127, KEY_BACKSPACE:
+          begin
+            if footText <> '' then
+              Delete(footText, Length(footText), 1);
+            if footText = '' then footText := '0';
+            footEdit := Length(footText);
+          end;
+        KEY_LEFT: if footEdit > 0 then Dec(footEdit);
+        KEY_RIGHT: if footEdit < Length(footText) then Inc(footEdit);
+      else
+        if (ch >= Ord('0')) and (ch <= Ord('9')) then
+        begin
+          if (Length(footText) < 4) and not ((footText = '0') and (ch = Ord('0'))) then
+          begin
+            if footText = '0' then footText := '';
+            footText := footText + Chr(ch);
+          end;
+          footEdit := Length(footText);
+        end;
+      end;
+      Continue;
+    end;
+    if HasFoot and (footFocus >= 2) then
+    begin
+      case ch of
+        9, KEY_RIGHT, KEY_LEFT:        // Tab / arrows cycle the buttons
+          footFocus := 2 + ((footFocus - 2 + 1) mod Length(footBtns));
+        10, 13, KEY_ENTER, 32:
+          if footFocus = 2 then
+          begin
+            footVal := StrToIntDef(footText, footVal);
+            FootValue^ := footVal;
+            Exit(cur);
+          end
+          else
+            Exit(-1);
+        27: Exit(-1);
+      end;
+      Continue;
+    end;
+    case ch of
+      ERR: ;
+      10, 13, KEY_ENTER: Exit(cur);
+      27: Exit(-1);
+      9:
+        if HasFoot then
+        begin
+          footFocus := 1;
+          footEdit := Length(footText);
+        end;
+      KEY_UP: cur := (cur + Items.Count - 1) mod Items.Count;
+      KEY_DOWN: cur := (cur + 1) mod Items.Count;
+      KEY_HOME: cur := 0;
+      KEY_END: cur := Items.Count - 1;
+      KEY_MOUSE: ;   { handled above, before the focus branches }
     else
       if (ch >= Ord('1')) and (ch <= Ord('9')) and
          (ch - Ord('1') < Items.Count) then
@@ -563,7 +804,7 @@ begin
   x := (COLS - W) div 2;
   if x < 0 then x := 0;
   DrawBox(y, x, 5, W, Busy.Title);
-  PutStr(y + 1, x + 2, Utf8PadRight(' ' + Busy.Detail, W - 4), cpMenuBar);
+  PutStr(y + 1, x + 2, Utf8PadRight(' ' + Busy.Detail, W - 4), cpDialog);
 
   bw := W - 6;
   if Busy.Percent >= 0 then
@@ -582,7 +823,7 @@ begin
       if (i >= pos) and (i < pos + Seg) then bar := bar + '█'
       else bar := bar + '░';
   end;
-  PutStr(y + 2, x + 3, bar, cpMenuBar);
+  PutStr(y + 2, x + 3, bar, cpDialog);
 
   secs := IntToStr(Busy.ElapsedMs div 1000) + ' s';
   info := '';
@@ -592,7 +833,7 @@ begin
     info := info + IntToStr(Busy.Lines) + ' ' + Busy.CountWhat + '  ';
   info := info + secs;
   PutStr(y + 3, x + 2, Utf8PadRight(' ' + info, W - 4 - 12) +
-         Utf8PadRight('Esc cancel', 12), cpMenuBar);
+         Utf8PadRight('Esc cancel', 12), cpDialog);
   refresh;
 end;
 
@@ -614,11 +855,11 @@ var
     begin
       idx := top + j;
       if idx < Items.Count then s := ' ' + Items[idx] + ' ' else s := '';
-      if (idx = Cur) and (Items.Count > 0) then pair := cpMenuSel
-      else pair := cpMenuBar;
+      if (idx = Cur) and (Items.Count > 0) then pair := cpDlgSel
+      else pair := cpDlgList;
       PutStr(y + 1 + j, x + 2, Utf8PadRight(s, w - 4), pair);
     end;
-    PutStr(y + h - 2, x + 2, Utf8PadRight(' ' + Hint, w - 4), cpMenuBar);
+    PutStr(y + h - 2, x + 2, Utf8PadRight(' ' + Hint, w - 4), cpDialog);
     refresh;
   end;
 
@@ -752,7 +993,7 @@ var
     begin
       if top + j > High(vis) then
       begin
-        PutStr(y + 1 + j, x + 1, StringOfChar(' ', w - 2), cpMenuBar);
+        PutStr(y + 1 + j, x + 1, StringOfChar(' ', w - 2), cpDlgList);
         Continue;
       end;
       it := vis[top + j];
@@ -763,7 +1004,7 @@ var
       else
         mark := '  ';
       s := StringOfChar(' ', Levels[it] * 2) + mark + Labels[it];
-      if top + j = cur then pair := cpMenuSel else pair := cpMenuBar;
+      if top + j = cur then pair := cpDlgSel else pair := cpDlgList;
       PutStr(y + 1 + j, x + 1, Utf8PadRight(s, w - 2), pair);
     end;
     refresh;
@@ -928,7 +1169,7 @@ var
     for j := 0 to High(Fields) do
     begin
       fy := y + 1 + j;
-      PutStr(fy, x + 2, Utf8PadRight(Fields[j].Caption, lw), cpMenuBar);
+      PutStr(fy, x + 2, Utf8PadRight(Fields[j].Caption, lw), cpDialog);
       case Fields[j].Kind of
         fkText:
           begin
@@ -940,7 +1181,7 @@ var
             if j = cur then
             begin
               caretCell := ' ';
-              PutStr(fy, x + 2 + lw + Utf8Width(v), caretCell, cpFKeyNum);
+              PutStr(fy, x + 2 + lw + Utf8Width(v), caretCell, cpCursor);
             end;
           end;
         fkChoice:
@@ -948,7 +1189,7 @@ var
             v := '';
             if (Fields[j].Index >= 0) and (Fields[j].Index <= High(Fields[j].Options)) then
               v := Fields[j].Options[Fields[j].Index];
-            if j = cur then pair := cpMenuSel else pair := cpInput;
+            if j = cur then pair := cpDlgSel else pair := cpInput;
             if IsDrop(j) then
               PutStr(fy, x + 2 + lw, Utf8PadRight(' ' + v, fw - 2) + '▾ ', pair)
             else
@@ -957,16 +1198,16 @@ var
         fkCheck:
           begin
             if Fields[j].Checked then v := '[x]' else v := '[ ]';
-            if j = cur then pair := cpMenuSel else pair := cpMenuBar;
+            if j = cur then pair := cpDlgSel else pair := cpDialog;
             PutStr(fy, x + 2 + lw, v, pair);
-            PutStr(fy, x + 5 + lw, StringOfChar(' ', fw - 3), cpMenuBar);
+            PutStr(fy, x + 5 + lw, StringOfChar(' ', fw - 3), cpDialog);
           end;
       end;
     end;
-    if cur = n then PutStr(by, okX, '[ OK ]', cpMenuSel)
-    else PutStr(by, okX, '[ OK ]', cpMenuBar);
-    if cur = n + 1 then PutStr(by, cancelX, '[ Cancel ]', cpMenuSel)
-    else PutStr(by, cancelX, '[ Cancel ]', cpMenuBar);
+    if cur = n then PutStr(by, okX, '[ OK ]', cpDlgBtnSel)
+    else PutStr(by, okX, '[ OK ]', cpDialog);
+    if cur = n + 1 then PutStr(by, cancelX, '[ Cancel ]', cpDlgBtnSel)
+    else PutStr(by, cancelX, '[ Cancel ]', cpDialog);
     refresh;
   end;
 
@@ -1080,13 +1321,14 @@ begin
   x := (COLS - w) div 2;
   Base;
   DrawBox(y, x, h, w, Title);
-  PutStr(y + 1, x + 2, Utf8PadRight(' ' + Msg, w - 4), cpMenuBar);
+  PutStr(y + 1, x + 2, Utf8PadRight(' ' + Msg, w - 4), cpDialog);
   refresh;
 end;
 
-function ListDialog(const Title: AnsiString; Items: TStrings): Integer;
+function ListDialog(const Title: AnsiString; Items: TStrings;
+                    StartCur: Integer): Integer;
 begin
-  Result := LiveListDialog(Title, Items, nil, 0, 0);
+  Result := LiveListDialog(Title, Items, nil, 0, 0, StartCur);
 end;
 
 function PasswordBox(const Title, Prompt: AnsiString;
@@ -1114,7 +1356,7 @@ var
   begin
     Base;
     DrawBox(y, x, h, w, Title);
-    PutStr(y + 1, x + 2, Prompt, cpMenuBar);
+    PutStr(y + 1, x + 2, Prompt, cpDialog);
     if caret < ofs then ofs := caret;
     if caret - ofs >= fw then ofs := caret - fw + 1;
     if InputMasked then
@@ -1125,11 +1367,11 @@ var
     PutStr(y + 2, x + 2, vis, cpInput);
     if focus = 0 then  // visible caret cell
       PutStr(y + 2, x + 2 + caret - ofs,
-             Utf8Copy(vis + ' ', caret - ofs + 1, 1), cpFKeyNum);
-    if focus = 1 then PutStr(by, okX, '[ OK ]', cpMenuSel)
-    else PutStr(by, okX, '[ OK ]', cpMenuBar);
-    if focus = 2 then PutStr(by, cancelX, '[ Cancel ]', cpMenuSel)
-    else PutStr(by, cancelX, '[ Cancel ]', cpMenuBar);
+             Utf8Copy(vis + ' ', caret - ofs + 1, 1), cpCursor);
+    if focus = 1 then PutStr(by, okX, '[ OK ]', cpDlgBtnSel)
+    else PutStr(by, okX, '[ OK ]', cpDialog);
+    if focus = 2 then PutStr(by, cancelX, '[ Cancel ]', cpDlgBtnSel)
+    else PutStr(by, cancelX, '[ Cancel ]', cpDialog);
     refresh;
   end;
 

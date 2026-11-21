@@ -76,6 +76,8 @@ for f in "$APP/Contents/MacOS/$BIN_NAME" "$APP/Contents/Frameworks/$DYLIB_BASE";
 done
 
 cp "$ROOT/assets/dn.icns" "$APP/Contents/Resources/dn.icns"
+# bundled fonts + their licenses (Options > Fonts/Colors)
+cp -R "$ROOT/assets/fonts" "$APP/Contents/Resources/fonts"
 
 # Bundle a terminfo subset: Homebrew's ncurses only searches Homebrew's
 # terminfo path, which doesn't exist on machines without Homebrew. The

@@ -291,36 +291,36 @@ var
     line: AnsiString;
   begin
     if Assigned(RedrawBase) then RedrawBase();
-    PutStr(y, x, bxTL + Rep(bxH, w - 2) + bxTR, cpMenuBar);
+    PutStr(y, x, bxTL + Rep(bxH, w - 2) + bxTR, cpDlgFrame);
     PutStr(y, x + (w - 14) div 2, ' SSH Sessions ', cpTitleAct);
     for j := 0 to ph - 1 do
     begin
       row := y + 1 + j;
-      PutStr(row, x, bxV, cpMenuBar);
-      PutStr(row, x + w - 1, bxV, cpMenuBar);
+      PutStr(row, x, bxV, cpDlgFrame);
+      PutStr(row, x + w - 1, bxV, cpDlgFrame);
       if top + j <= High(Rows) then
       begin
-        if top + j = cur then pair := cpMenuSel else pair := cpMenuBar;
+        if top + j = cur then pair := cpDlgSel else pair := cpDlgList;
         line := StringOfChar(' ', Rows[top + j].Depth * 2) + Rows[top + j].Label_;
         PutStr(row, x + 1, PadRight(' ' + line, w - 2), pair);
       end
       else
-        PutStr(row, x + 1, StringOfChar(' ', w - 2), cpMenuBar);
+        PutStr(row, x + 1, StringOfChar(' ', w - 2), cpDlgList);
     end;
     { empty-state hint }
     if High(Rows) < 0 then
     begin
       line := 'No saved sessions yet.';
-      PutStr(y + ph div 2, x + (w - Length(line)) div 2, line, cpMenuBar);
+      PutStr(y + ph div 2, x + (w - Length(line)) div 2, line, cpDialog);
       line := 'Press Ins (or click Add) to create one.';
-      PutStr(y + ph div 2 + 1, x + (w - Length(line)) div 2, line, cpMenuBar);
+      PutStr(y + ph div 2 + 1, x + (w - Length(line)) div 2, line, cpDialog);
     end;
-    PutStr(y + h - 2, x, bxSepL + Rep(bxSepH, w - 2) + bxSepR, cpMenuBar);
-    PutStr(y + h - 1, x, bxSBL + Rep(bxSepH, w - 2) + bxSBR, cpMenuBar);
+    PutStr(y + h - 2, x, bxSepL + Rep(bxSepH, w - 2) + bxSepR, cpDlgFrame);
+    PutStr(y + h - 1, x, bxSBL + Rep(bxSepH, w - 2) + bxSBR, cpDlgFrame);
     { clickable footer buttons }
-    PutStr(y + h - 2, x + 1, StringOfChar(' ', w - 2), cpMenuBar);
+    PutStr(y + h - 2, x + 1, StringOfChar(' ', w - 2), cpDialog);
     for j := 0 to High(btns) do
-      PutStr(y + h - 2, btns[j].X0, btns[j].Cap, cpMenuSel);
+      PutStr(y + h - 2, btns[j].X0, btns[j].Cap, cpDlgBtnSel);
     refresh;
   end;
 

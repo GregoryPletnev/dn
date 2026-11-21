@@ -38,6 +38,9 @@ mkdir -p "$STAGING/DEBIAN" \
 
 install -m 755 "$ROOT/bin/dn" "$STAGING/usr/bin/dn"
 install -m 644 "$ROOT/README.md" "$STAGING/usr/share/doc/$PKG/README.md"
+# bundled fonts + their licenses (Options > Fonts/Colors)
+install -d "$STAGING/usr/share/dn/fonts"
+install -m 644 "$ROOT"/assets/fonts/* "$STAGING/usr/share/dn/fonts/"
 install -m 644 "$ROOT/assets/dn-icon-1024.png" \
         "$STAGING/usr/share/icons/hicolor/1024x1024/apps/$PKG.png"
 

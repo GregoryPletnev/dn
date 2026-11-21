@@ -34,6 +34,20 @@ const
   cpSynSymbol  = 21;
   cpSynKw1     = 22;
   cpSynKw2     = 23;
+  { more interface elements of the DN palette (40..51; 30..37 are the
+    savers', 20..28 Tetris', 64.. the browser's) }
+  cpFrameInact = 40; // inactive panel frame
+  cpTitlePas   = 41; // inactive panel title (path)
+  cpColTitle   = 42; // panel column titles
+  cpInfo       = 43; // info line at the bottom of a panel
+  cpClock      = 44; // clock in the menu bar
+  cpDialog     = 45; // dialog text and background
+  cpDlgFrame   = 46; // dialog frame
+  cpDlgList    = 47; // list rows in a dialog
+  cpDlgSel     = 48; // focused list row in a dialog
+  cpDlgBtnSel  = 49; // focused dialog button
+  cpEditor     = 50; // editor text
+  cpCmdPrompt  = 51; // command line prompt (the path)
 
   { Mouse button masks for NCURSES_MOUSE_VERSION = 2 (5 bits per button,
     mask = m shl ((btn-1)*5)). The FPC binding's BUTTON* constants use the
@@ -93,9 +107,73 @@ function CurrentTimeout: LongInt;
 function getmouse(event: PMEVENT): LongInt;
 function ungetmouse(event: PMEVENT): LongInt;
 procedure MouseEnqueue(x, y: Integer; bstate: LongWord);
-{ re-init the color pairs to one of the schemes (dnoptions pal* constants);
-  ScrInit applies scheme 0, dn.pas re-applies the configured one }
-procedure ApplyPalette(Scheme: Integer);
+{ bstate of the last report PopMouse handed out (0 when none); the release
+  half of a click carries mbtn1Released }
+function LastMouseState: LongWord;
+{ True when the event just handed out is a button release. Dialogs act on
+  the press and drop this event instead of reading another key. }
+function MouseIsRelease: Boolean;
+{ drop every queued report and the hand-out one }
+procedure MouseFlush;
+{ True while the queue holds an unclaimed report }
+function MousePending: Boolean;
+
+
+type
+  { a Dos Navigator 1.51 palette: the 228 TV attributes of TApplication
+    (CColor layout) and the VGA DAC (6-bit RGB) it was designed with }
+  TDnPalette = record
+    Id: AnsiString;
+    Name: AnsiString;
+    Attr: array[1..228] of Byte;
+    Dac: array[0..15, 0..2] of Byte;
+  end;
+
+{$I dnpalettes.inc}
+
+const
+  { the DN attribute index behind each of our pairs: the chain the original
+    views use (CDoubleWindow -> CPanel, CMenuView, CGrayDialog, ...) }
+  PairDnIndex: array[0..19] of record Pair, Index: Integer; end = (
+    (Pair: cpFrame;      Index: 81),   // CDoubleWindow 2: active frame
+    (Pair: cpFrameInact; Index: 80),   // CDoubleWindow 1: passive frame
+    (Pair: cpFile;       Index: 85),   // CPanel 1: normal text
+    (Pair: cpSelected;   Index: 87),   // CPanel 3: selected text
+    (Pair: cpCursor;     Index: 88),   // CPanel 4: normal cursor
+    (Pair: cpSelCursor;  Index: 89),   // CPanel 5: selected cursor
+    (Pair: cpColTitle;   Index: 165),  // CPanel 6: column titles
+    (Pair: cpDir;        Index: 172),  // CPanel 7: highlight, directories
+    (Pair: cpTitleAct;   Index: 90),   // CTopView 1: active
+    (Pair: cpTitlePas;   Index: 91),   // CTopView 2: passive
+    (Pair: cpInfo;       Index: 119),  // CInfoView 1
+    (Pair: cpClock;      Index: 1),    // TClockView: the app's entry 1
+    (Pair: cpMenuBar;    Index: 2),    // CMenuView / CStatusLine normal
+    (Pair: cpFKeyNum;    Index: 4),    //   shortcut (the F-key numbers)
+    (Pair: cpMenuSel;    Index: 5),    //   selected
+    (Pair: cpDialog;     Index: 37),   // CGrayDialog 6: static text
+    (Pair: cpDlgFrame;   Index: 33),   // CGrayDialog 2: active frame
+    (Pair: cpDlgBtnSel;  Index: 43),   // CGrayDialog 12: selected button
+    (Pair: cpInput;      Index: 50),   // CGrayDialog 19: input line
+    (Pair: cpViewer;     Index: 117)   // CViewWindow 6: viewer text
+  );
+  PairDnIndex2: array[0..2] of record Pair, Index: Integer; end = (
+    (Pair: cpDlgList;    Index: 57),   // CGrayDialog 26: list normal
+    (Pair: cpDlgSel;     Index: 58),   // CGrayDialog 27: list focused
+    (Pair: cpEditor;     Index: 76)    // CUniWindow 13: editor text
+  );
+
+function DnPaletteIndex(const Id: AnsiString): Integer;
+{ the DN attribute byte a pair shows in palette Pal (for tests/preview) }
+function DnPairAttr(Pal, Pair: Integer): Byte;
+{ the terminal color for VGA color c of palette Pal: an ANSI index (0..15)
+  for the standard VGA colors, the nearest xterm-256 color for a color the
+  palette re-programs, c and 7 on an 8-color terminal }
+function DnTermColor(Pal, c, Colors: Integer): Integer;
+{ re-init the color pairs to DnPalettes[Pal]; ScrInit applies 0, dn.pas
+  re-applies the configured one }
+procedure ApplyPalette(Pal: Integer);
+{ the terminal color of the viewer background in the current palette }
+function ViewerBg: Integer;
 { set highlight pair cpHl<idx> (idx 1..4) to fg on the current panel bg;
   call after ApplyPalette (which resets the bg) }
 procedure SetHlPair(idx, fg: Integer);
@@ -180,6 +258,109 @@ begin
     c_setlocale(LC_CTYPE_C, 'en_US.UTF-8');
 end;
 
+const
+  { the standard VGA DAC (DRIVERS.PAS VGA_Default) }
+  VgaStd: array[0..15, 0..2] of Byte = (
+    (0, 0, 0), (0, 0, 42), (0, 42, 0), (0, 42, 42), (42, 0, 0), (42, 0, 42),
+    (42, 21, 0), (42, 42, 42), (21, 21, 21), (21, 21, 63), (21, 63, 21),
+    (21, 63, 63), (63, 21, 21), (63, 21, 63), (63, 63, 21), (63, 63, 63));
+  { VGA color order (blue first) to ANSI order (red first) }
+  VgaToAnsi: array[0..7] of Integer = (0, 4, 2, 6, 1, 5, 3, 7);
+
+const
+  PalettePairs = [cpFrame..cpViewer, cpFrameInact..cpCmdPrompt];
+
+var
+  { pairs whose foreground needs A_BOLD to be bright (8-color terminals) }
+  PairBold: array[0..255] of Boolean;
+  SynBG: LongInt = COLOR_BLUE;
+
+function DnPaletteIndex(const Id: AnsiString): Integer;
+var
+  i: Integer;
+begin
+  for i := 0 to DnPalCount - 1 do
+    if DnPalettes[i].Id = Id then Exit(i);
+  Result := -1;
+end;
+
+function DnPairAttr(Pal, Pair: Integer): Byte;
+var
+  i: Integer;
+begin
+  Result := $07;
+  if Pair = cpCmdLine then Exit($07);        // TCommandLine.Draw: fixed
+  if Pair = cpCmdPrompt then Exit($0F);
+  if (Pal < 0) or (Pal >= DnPalCount) then Pal := 0;
+  for i := 0 to High(PairDnIndex) do
+    if PairDnIndex[i].Pair = Pair then
+      Exit(DnPalettes[Pal].Attr[PairDnIndex[i].Index]);
+  for i := 0 to High(PairDnIndex2) do
+    if PairDnIndex2[i].Pair = Pair then
+      Exit(DnPalettes[Pal].Attr[PairDnIndex2[i].Index]);
+end;
+
+function Nearest256(r, g, b: Integer): Integer;
+const
+  Steps: array[0..5] of Integer = (0, 95, 135, 175, 215, 255);
+var
+  i, best, d, bd, v, ri, gi, bi: Integer;
+
+  function Step(x: Integer): Integer;
+  var
+    k: Integer;
+  begin
+    Result := 0;
+    for k := 1 to 5 do
+      if Abs(Steps[k] - x) < Abs(Steps[Result] - x) then Result := k;
+  end;
+
+begin
+  ri := Step(r); gi := Step(g); bi := Step(b);
+  best := 16 + 36 * ri + 6 * gi + bi;
+  bd := Sqr(Steps[ri] - r) + Sqr(Steps[gi] - g) + Sqr(Steps[bi] - b);
+  for i := 0 to 23 do                       // the gray ramp 232..255
+  begin
+    v := 8 + 10 * i;
+    d := Sqr(v - r) + Sqr(v - g) + Sqr(v - b);
+    if d < bd then
+    begin
+      bd := d;
+      best := 232 + i;
+    end;
+  end;
+  Result := best;
+end;
+
+function DnTermColor(Pal, c, Colors: Integer): Integer;
+var
+  custom: Boolean;
+  k: Integer;
+begin
+  c := c and 15;
+  custom := False;
+  for k := 0 to 2 do
+    if DnPalettes[Pal].Dac[c, k] <> VgaStd[c, k] then custom := True;
+  if custom and (Colors >= 256) then
+    Result := Nearest256(DnPalettes[Pal].Dac[c, 0] * 255 div 63,
+                         DnPalettes[Pal].Dac[c, 1] * 255 div 63,
+                         DnPalettes[Pal].Dac[c, 2] * 255 div 63)
+  else if Colors >= 16 then
+    Result := VgaToAnsi[c and 7] + 8 * (c shr 3)
+  else
+    Result := VgaToAnsi[c and 7];
+end;
+
+procedure SetDnPair(Pal, Pair: Integer; Attr: Byte);
+var
+  fg, bg: Integer;
+begin
+  fg := DnTermColor(Pal, Attr and 15, COLORS);
+  bg := DnTermColor(Pal, Attr shr 4, COLORS);
+  PairBold[Pair] := (COLORS < 16) and (Attr and 8 <> 0);
+  init_pair(Pair, fg, bg);
+end;
+
 procedure SetHlPair(idx, fg: Integer);
 begin
   if (idx < 1) or (idx > 4) then Exit;
@@ -187,78 +368,44 @@ begin
   init_pair(cpHl1 + idx - 1, fg, PanelBG);
 end;
 
-procedure ApplyPalette(Scheme: Integer);
-var
-  synBG: LongInt;
+function ViewerBg: Integer;
 begin
-  if Scheme = 0 then PanelBG := COLOR_BLUE else PanelBG := COLOR_BLACK;
-  { syntax pairs follow the viewer background; the draw code adds bold
-    for comments (dark gray) and keywords }
-  if Scheme = 0 then synBG := COLOR_BLUE else synBG := COLOR_BLACK;
-  if Scheme = 2 then
+  Result := SynBG;
+end;
+
+procedure ApplyPalette(Pal: Integer);
+var
+  i: Integer;
+  mono: Boolean;
+begin
+  if (Pal < 0) or (Pal >= DnPalCount) then Pal := 0;
+  FillChar(PairBold, SizeOf(PairBold), 0);
+  for i := 0 to High(PairDnIndex) do
+    SetDnPair(Pal, PairDnIndex[i].Pair, DnPairAttr(Pal, PairDnIndex[i].Pair));
+  for i := 0 to High(PairDnIndex2) do
+    SetDnPair(Pal, PairDnIndex2[i].Pair, DnPairAttr(Pal, PairDnIndex2[i].Pair));
+  SetDnPair(Pal, cpCmdLine, DnPairAttr(Pal, cpCmdLine));
+  SetDnPair(Pal, cpCmdPrompt, DnPairAttr(Pal, cpCmdPrompt));
+  { user highlight groups and syntax classes keep their own foregrounds
+    on the panel / viewer background of the palette }
+  PanelBG := DnTermColor(Pal, DnPairAttr(Pal, cpFile) shr 4, COLORS);
+  SynBG := DnTermColor(Pal, DnPairAttr(Pal, cpViewer) shr 4, COLORS);
+  mono := (DnPalettes[Pal].Id = 'bw') or (DnPalettes[Pal].Id = 'vgabw') or
+          (DnPalettes[Pal].Id = 'mono');
+  if mono then
   begin
-    { monochrome: only bold-at-draw distinguishes the classes }
-    init_pair(cpSynNumber,  COLOR_WHITE, synBG);
-    init_pair(cpSynString,  COLOR_WHITE, synBG);
-    init_pair(cpSynComment, COLOR_WHITE, synBG);
-    init_pair(cpSynSymbol,  COLOR_WHITE, synBG);
-    init_pair(cpSynKw1,     COLOR_WHITE, synBG);
-    init_pair(cpSynKw2,     COLOR_WHITE, synBG);
+    { only bold-at-draw distinguishes the classes }
+    for i := cpSynNumber to cpSynKw2 do
+      init_pair(i, DnTermColor(Pal, DnPairAttr(Pal, cpViewer) and 7, COLORS), SynBG);
   end
   else
   begin
-    init_pair(cpSynNumber,  COLOR_GREEN,  synBG);
-    init_pair(cpSynString,  COLOR_CYAN,   synBG);
-    init_pair(cpSynComment, COLOR_BLACK,  synBG);
-    init_pair(cpSynSymbol,  COLOR_YELLOW, synBG);
-    init_pair(cpSynKw1,     COLOR_WHITE,  synBG);
-    init_pair(cpSynKw2,     COLOR_YELLOW, synBG);
-  end;
-  case Scheme of
-    1: begin  { dark: black background }
-      init_pair(cpFrame,     COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpFile,      COLOR_CYAN,   COLOR_BLACK);
-      init_pair(cpDir,       COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpCursor,    COLOR_BLACK,  COLOR_CYAN);
-      init_pair(cpMenuBar,   COLOR_BLACK,  COLOR_CYAN);
-      init_pair(cpFKeyNum,   COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpCmdLine,   COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpSelected,  COLOR_YELLOW, COLOR_BLACK);
-      init_pair(cpSelCursor, COLOR_YELLOW, COLOR_CYAN);
-      init_pair(cpTitleAct,  COLOR_BLACK,  COLOR_CYAN);
-      init_pair(cpMenuSel,   COLOR_BLACK,  COLOR_GREEN);
-      init_pair(cpInput,     COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpViewer,    COLOR_WHITE,  COLOR_BLACK);
-    end;
-    2: begin  { black & white }
-      init_pair(cpFrame,     COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpFile,      COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpDir,       COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpCursor,    COLOR_BLACK,  COLOR_WHITE);
-      init_pair(cpMenuBar,   COLOR_BLACK,  COLOR_WHITE);
-      init_pair(cpFKeyNum,   COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpCmdLine,   COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpSelected,  COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpSelCursor, COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpTitleAct,  COLOR_BLACK,  COLOR_WHITE);
-      init_pair(cpMenuSel,   COLOR_WHITE,  COLOR_BLACK);
-      init_pair(cpInput,     COLOR_BLACK,  COLOR_WHITE);
-      init_pair(cpViewer,    COLOR_WHITE,  COLOR_BLACK);
-    end;
-  else      { classic DN blue }
-    init_pair(cpFrame,     COLOR_WHITE,  COLOR_BLUE);
-    init_pair(cpFile,      COLOR_CYAN,   COLOR_BLUE);
-    init_pair(cpDir,       COLOR_WHITE,  COLOR_BLUE);
-    init_pair(cpCursor,    COLOR_BLACK,  COLOR_CYAN);
-    init_pair(cpMenuBar,   COLOR_BLACK,  COLOR_CYAN);
-    init_pair(cpFKeyNum,   COLOR_WHITE,  COLOR_BLACK);
-    init_pair(cpCmdLine,   COLOR_WHITE,  COLOR_BLACK);
-    init_pair(cpSelected,  COLOR_YELLOW, COLOR_BLUE);
-    init_pair(cpSelCursor, COLOR_YELLOW, COLOR_CYAN);
-    init_pair(cpTitleAct,  COLOR_BLACK,  COLOR_CYAN);
-    init_pair(cpMenuSel,   COLOR_BLACK,  COLOR_GREEN);
-    init_pair(cpInput,     COLOR_WHITE,  COLOR_BLUE);
-    init_pair(cpViewer,    COLOR_WHITE,  COLOR_BLUE);
+    init_pair(cpSynNumber,  COLOR_GREEN,  SynBG);
+    init_pair(cpSynString,  COLOR_CYAN,   SynBG);
+    init_pair(cpSynComment, COLOR_BLACK,  SynBG);
+    init_pair(cpSynSymbol,  COLOR_YELLOW, SynBG);
+    init_pair(cpSynKw1,     COLOR_WHITE,  SynBG);
+    init_pair(cpSynKw2,     COLOR_YELLOW, SynBG);
   end;
 end;
 
@@ -352,6 +499,9 @@ begin
   Result := MouseHead <> MouseTail;
 end;
 
+{ the last event PopMouse handed out: its bstate is mbtn1Released when it
+  is the release half of a click. Callers that treat a press as the click
+  drop this report instead of acting on it a second time. }
 { hand out one queued event. getch calls this when it returns KEY_MOUSE so
   the event is already off the queue: a caller that ignores the mouse (Tetris,
   the screen saver) does not wedge the queue and its next getch still returns
@@ -359,6 +509,25 @@ end;
 var
   MouseCurrent: MEVENT;
   MouseHasCurrent: Boolean;
+
+function LastMouseState: LongWord;
+begin
+  if MouseHasCurrent then Result := MouseCurrent.bstate else Result := 0;
+end;
+
+function MouseIsRelease: Boolean;
+begin
+  Result := (LastMouseState and (mbtn1Released or mbtn2Released or
+                                 mbtn3Released)) <> 0;
+end;
+
+{ drop every queued report and the hand-out one: after a dialog picked a
+  row, the release of that click must not reach the next input }
+procedure MouseFlush;
+begin
+  MouseHasCurrent := False;
+  MouseHead := MouseTail;
+end;
 
 function PopMouse: Boolean;
 begin
@@ -673,7 +842,10 @@ var
   attr: LongInt;
 begin
   attr := COLOR_PAIR(pair);
-  if bold then
+  { a palette pair carries its own brightness; only highlight and syntax
+    pairs (and windows' private pairs) take the caller's bold }
+  if PairBold[pair and 255] or
+     (bold and not (pair in PalettePairs)) then
     attr := attr or A_BOLD;
   attrset(attr);
   mvaddstr(y, x, PChar(s));
@@ -683,7 +855,8 @@ procedure FillRow(y, x, w: Integer; pair: Integer);
 var
   i: Integer;
 begin
-  attrset(COLOR_PAIR(pair));
+  if PairBold[pair and 255] then attrset(COLOR_PAIR(pair) or A_BOLD)
+  else attrset(COLOR_PAIR(pair));
   for i := 0 to w - 1 do
     mvaddstr(y, x + i, ' ');
 end;

@@ -32,6 +32,11 @@ type
     { visible columns (Left/Right menu > Columns...); Name is always on }
     ColSize, ColDate, ColTime: Boolean;
     Vfs: TVFS;               // never nil; LocalVFS by default
+    { the list (find results) a nested VFS was opened from: '..' at that
+      VFS's root returns here, to the same cursor }
+    Back: TVFS;
+    BackPath: AnsiString;
+    BackCur, BackTop: Integer;
     constructor Create(const APath: AnsiString);
     destructor Destroy; override;
     { switch to another VFS (frees the old one unless it is LocalVFS) }
@@ -198,13 +203,30 @@ destructor TPanel.Destroy;
 begin
   if Vfs <> TVFS(LocalVFS) then
     Vfs.Free;
+  Back.Free;
   inherited;
 end;
 
 procedure TPanel.SetVfs(AVfs: TVFS; const APath: AnsiString);
 begin
-  if (Vfs <> TVFS(LocalVFS)) and (Vfs <> AVfs) then
-    Vfs.Free;
+  if Vfs <> AVfs then
+  begin
+    if Vfs.KeepWhenLeft and (AVfs <> TVFS(LocalVFS)) and
+       not AVfs.KeepWhenLeft then
+    begin
+      { a database, archive or image opened from a kept list }
+      FreeAndNil(Back);
+      Back := Vfs;
+      BackPath := Path;
+      BackCur := Cur;
+      BackTop := Top;
+    end
+    else
+    begin
+      if Vfs <> TVFS(LocalVFS) then Vfs.Free;
+      FreeAndNil(Back);
+    end;
+  end;
   Vfs := AVfs;
   Path := APath;
   Cur := 0;
@@ -294,6 +316,7 @@ var
   inner, NmW, i, row, idx, pair, c, nc, x: Integer;
   title, line, nm: AnsiString;
   bold: Boolean;
+  fr: Integer;                    // frame pair: active or passive
   f: TFileRec;
   cols: array[0..MaxCols - 1] of Integer;   // active column kinds, in order
   cell: array[0..MaxCols - 1] of AnsiString;
@@ -333,28 +356,31 @@ begin
     if (NmW < 8) and (nc > 0) then Dec(nc) else Break;
   until False;
 
+  { DN draws the passive panel's frame dimmer }
+  if Active then fr := cpFrame else fr := cpFrameInact;
+
   { top border with centered path title }
   title := ' ' + DisplayPath + ' ';
   if Utf8Len(title) > inner - 2 then
     title := ' …' + Utf8Copy(DisplayPath, Utf8Len(DisplayPath) - (inner - 6),
                              inner - 5) + ' ';
-  PutStr(1, X0, bxTL + Rep(bxH, inner) + bxTR, cpFrame, True);
+  PutStr(1, X0, bxTL + Rep(bxH, inner) + bxTR, fr, True);
   if Active then
     PutStr(1, X0 + 1 + (inner - Utf8Len(title)) div 2, title, cpTitleAct)
   else
-    PutStr(1, X0 + 1 + (inner - Utf8Len(title)) div 2, title, cpFrame, True);
+    PutStr(1, X0 + 1 + (inner - Utf8Len(title)) div 2, title, cpTitlePas);
 
   { column headers }
-  PutStr(2, X0, bxV, cpFrame, True);
-  PutStr(2, X0 + 1, PadRight(' Name', NmW), cpSelected, True);
+  PutStr(2, X0, bxV, fr, True);
+  PutStr(2, X0 + 1, PadRight(' Name', NmW), cpColTitle);
   x := X0 + 1 + NmW;
   for c := 0 to nc - 1 do
   begin
-    PutStr(2, x, bxColV, cpFrame, True);
-    PutStr(2, x + 1, PadLeft(ColTitle[cols[c]], ColW[cols[c]]), cpSelected, True);
+    PutStr(2, x, bxColV, fr, True);
+    PutStr(2, x + 1, PadLeft(ColTitle[cols[c]], ColW[cols[c]]), cpColTitle);
     x := x + 1 + ColW[cols[c]];
   end;
-  PutStr(2, X0 + W - 1, bxV, cpFrame, True);
+  PutStr(2, X0 + W - 1, bxV, fr, True);
 
   { file rows }
   if Cur < Top then Top := Cur;
@@ -363,20 +389,20 @@ begin
   begin
     row := 3 + i;
     idx := Top + i;
-    PutStr(row, X0, bxV, cpFrame, True);
+    PutStr(row, X0, bxV, fr, True);
     if ScrollbarVisible then
     begin
       if i = 0 then
-        PutStr(row, X0 + W - 1, '▲', cpFrame, True)
+        PutStr(row, X0 + W - 1, '▲', fr, True)
       else if i = ListHeight - 1 then
-        PutStr(row, X0 + W - 1, '▼', cpFrame, True)
+        PutStr(row, X0 + W - 1, '▼', fr, True)
       else if i = ThumbRow then
-        PutStr(row, X0 + W - 1, '■', cpFrame, True)
+        PutStr(row, X0 + W - 1, '■', fr, True)
       else
-        PutStr(row, X0 + W - 1, '▒', cpFrame, True);
+        PutStr(row, X0 + W - 1, '▒', fr, True);
     end
     else
-      PutStr(row, X0 + W - 1, bxV, cpFrame, True);
+      PutStr(row, X0 + W - 1, bxV, fr, True);
     if idx < Length(Files) then
     begin
       f := Files[idx];
@@ -405,7 +431,7 @@ begin
       x := X0 + 1 + NmW;
       for c := 0 to nc - 1 do
       begin
-        PutStr(row, x, bxColV, cpFrame, True);
+        PutStr(row, x, bxColV, fr, True);
         PutStr(row, x + 1, cell[c], pair, bold);
         x := x + 1 + ColW[cols[c]];
       end;
@@ -416,7 +442,7 @@ begin
       x := X0 + 1 + NmW;
       for c := 0 to nc - 1 do
       begin
-        PutStr(row, x, bxColV, cpFrame, True);
+        PutStr(row, x, bxColV, fr, True);
         PutStr(row, x + 1, StringOfChar(' ', ColW[cols[c]]), cpFile);
         x := x + 1 + ColW[cols[c]];
       end;
@@ -428,7 +454,7 @@ begin
   for c := 0 to nc - 1 do
     line := line + bxColB + Rep(bxSepH, ColW[cols[c]]);
   line := line + bxSepR;
-  PutStr(H - 1, X0, line, cpFrame, True);
+  PutStr(H - 1, X0, line, fr, True);
   f := CurFile;
   if f.Name <> '' then
   begin
@@ -441,12 +467,12 @@ begin
   end
   else
     line := '';
-  PutStr(H, X0, bxV, cpFrame, True);
-  PutStr(H, X0 + 1, Utf8PadRight(line, inner), cpFrame, True);
-  PutStr(H, X0 + W - 1, bxV, cpFrame, True);
+  PutStr(H, X0, bxV, fr, True);
+  PutStr(H, X0 + 1, Utf8PadRight(line, inner), cpInfo);
+  PutStr(H, X0 + W - 1, bxV, fr, True);
 
   { bottom border }
-  PutStr(H + 1, X0, bxBL + Rep(bxH, inner) + bxBR, cpFrame, True);
+  PutStr(H + 1, X0, bxBL + Rep(bxH, inner) + bxBR, fr, True);
 end;
 
 procedure TPanel.MoveCursor(delta: Integer);
@@ -482,6 +508,21 @@ var
 begin
   if Vfs.IsRootPath(Path) then
   begin
+    { opened from a kept list (the find results): back to it }
+    if Back <> nil then
+    begin
+      if Vfs <> TVFS(LocalVFS) then Vfs.Free;
+      Vfs := Back;
+      Back := nil;
+      Path := BackPath;
+      Load;
+      Cur := BackCur;
+      Top := BackTop;
+      if Cur > High(Files) then Cur := High(Files);
+      if Cur < 0 then Cur := 0;
+      if Top > Cur then Top := Cur;
+      Exit;
+    end;
     { at the VFS root: leave the VFS (archive -> its local directory) }
     if Vfs.ParentExit(ldir, lcur) then
     begin

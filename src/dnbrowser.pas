@@ -68,8 +68,11 @@ type
     HistPos: Integer;            // index into History
     RawHtml: AnsiString;         // last fetched body
     Fg0, Bg0: Integer;           // default text color of the palette
+    { the cache keeps only the 8x8 base colors, so a 256-color palette is
+      folded onto the base color (xterm index and 7) }
     PairOf: array[0..7, 0..7] of Integer;  // color-pair cache, 0 = none
     PairNext: Integer;
+    function BgBase(c: Integer): Integer;
     constructor CreateBrowser(const AUrl: AnsiString);
     destructor Destroy; override;
     procedure DrawContent(Focused: Boolean); override;
@@ -372,11 +375,12 @@ begin
   FAbort := False;
   { the default text color of the palette, for runs without a color }
   Fg0 := COLOR_WHITE;
-  if Opt.Palette = 0 then Bg0 := COLOR_BLUE else Bg0 := COLOR_BLACK;
+  Bg0 := BgBase(ViewerBg);
   for i := 0 to High(PairOf) do
     for j := 0 to High(PairOf[0]) do
       PairOf[i, j] := 0;
-  PairNext := 16;
+  { above every fixed dnscreen pair and the saver range 52..59 }
+  PairNext := 60;
   FetchAndRender(Url);
 end;
 
@@ -387,6 +391,39 @@ begin
   inherited;
 end;
 
+{ fold a terminal color onto the 8 curses base colors the pair cache
+  holds (bit 0 red, bit 1 green, bit 2 blue): 8..15 are the bright
+  twins of 0..7; 16..231 is the 6x6x6 cube, where a channel counts when
+  it reaches half of the strongest one (17, dark blue, gives blue);
+  232..255 is the gray ramp, dark half black, light half white }
+function TBrowserWin.BgBase(c: Integer): Integer;
+var
+  r, g, b, m: Integer;
+begin
+  if (c >= 0) and (c < 8) then Exit(c);
+  if (c >= 8) and (c < 16) then Exit(c - 8);
+  if (c >= 16) and (c < 232) then
+  begin
+    r := (c - 16) div 36;
+    g := ((c - 16) div 6) mod 6;
+    b := (c - 16) mod 6;
+    m := r;
+    if g > m then m := g;
+    if b > m then m := b;
+    Result := 0;
+    if m = 0 then Exit;
+    if 2 * r >= m then Result := Result or 1;
+    if 2 * g >= m then Result := Result or 2;
+    if 2 * b >= m then Result := Result or 4;
+    Exit;
+  end;
+  if (c >= 232) and (c <= 255) then
+  begin
+    if c < 244 then Exit(0) else Exit(7);
+  end;
+  Result := 0;
+end;
+
 { on-demand color-pair cache, like TERMINAL.md §3: fg on bg, bounded to the
   8x8 base colors, ids above the fixed dnscreen pairs }
 function TBrowserWin.CellPair(Fore, Back: Integer): Integer;
@@ -395,7 +432,9 @@ begin
   if (Back < 0) or (Back > 7) then Back := Bg0;
   Result := PairOf[Fore, Back];
   if Result <> 0 then Exit;
-  if PairNext > 255 then Exit(cpViewer);   // pair ids exhausted: fall back
+  { pair ids exhausted (255, or the terminal's own limit: 64 under
+    TERM=screen or linux): fall back to the viewer pair }
+  if (PairNext > 255) or (PairNext >= COLOR_PAIRS) then Exit(cpViewer);
   PairOf[Fore, Back] := PairNext;
   init_pair(PairNext, Fore, Back);
   Result := PairNext;
@@ -607,6 +646,7 @@ var
     b2 := Bg0;
     if CssColorToNc(RunFg, f2) then { mapped } else f2 := Fg0;
     if CssColorToNc(RunBg, b2) then { mapped } else b2 := Bg0;
+    b2 := BgBase(b2);
     attr := COLOR_PAIR(CellPair(f2, b2));
     if Bold then attr := attr or A_BOLD;
     if Under then attr := attr or A_UNDERLINE;

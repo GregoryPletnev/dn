@@ -256,6 +256,13 @@ procedure TGridWin.HandleClick(mx, my: Integer; bstate: QWord);
 var
   ci, cx: Integer;
 begin
+  { the wheel scrolls the rows wherever the pointer is; it is not a click }
+  if (bstate and (mbtnWheelUp or mbtnWheelDown)) <> 0 then
+  begin
+    if (bstate and mbtnWheelUp) <> 0 then ScrollTo(TopRow - 3)
+    else ScrollTo(TopRow + 3);
+    Exit;
+  end;
   if (my <= Y + 1) or (my >= Y + H - 1) or (Length(Res.Columns) = 0) then Exit;
   if TopRow + (my - Y - 2) < Length(Res.Rows) then
     CurRow := TopRow + (my - Y - 2);

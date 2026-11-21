@@ -316,6 +316,59 @@ def test_db_extension_without_sqlite_header_stays_a_file(sandbox):
 
 
 @needs_sqlite
+def test_sqlite_panel_lists_tables_without_counting_rows(sandbox):
+    """The panel listing must not run count(*) over every table: on a large
+    database that hangs the panel. The rows come back unknown (blank size)."""
+    db = sandbox / 'left' / 'app.db'
+    subprocess.run(['sqlite3', str(db)], check=True, text=True,
+                   input='create table big(n int);'
+                         'with recursive c(n) as (select 1 union all '
+                         'select n + 1 from c where n < 4321) '
+                         'insert into big select n from c;'
+                         'create view v as select n from big;'
+                         'create virtual table gone using fts5(body);')
+    s = make_session(sandbox)
+    try:
+        s.wait_text('app.db')
+        s.click_on('app.db', panel='left')
+        s.key('F3')
+        s.wait_text('big')                      # the table is listed
+        s.wait_text('v')                        # the view is listed too
+        assert s.row_of('4321') is None         # the count is not computed
+    finally:
+        s.close()
+
+
+@needs_sqlite
+def test_wheel_scrolls_the_grid_rows(sandbox):
+    db = sandbox / 'left' / 'app.db'
+    subprocess.run(['sqlite3', str(db)], check=True, text=True,
+                   input='create table things(name text);'
+                         'with recursive c(n) as (select 1 union all '
+                         'select n + 1 from c where n < 80) '
+                         "insert into things select printf('item%03d', n) from c;")
+    s = make_session(sandbox)
+    try:
+        s.wait_text('app.db')
+        s.click_on('app.db', panel='left')
+        s.key('F3')
+        s.wait_text('db://app.db/')
+        s.wait_text('things')
+        s.click_on('things', panel='left')
+        s.key('F3')
+        s.wait_text('item001')
+        r = s.row_of('item001')
+        s.mouse(20, r + 5, button='wheeldown')
+        s.wait_text('row 4/80')                 # three rows, pointer ignored
+        assert s.row_of('item003') is None and s.row_of('item004') == r
+        s.mouse(20, r + 5, button='wheelup')
+        s.wait_text('row 4/80')                 # the cursor stays where it was
+        s.wait_text('item001')
+    finally:
+        s.close()
+
+
+@needs_sqlite
 def test_sqlite_file_table_rows_from_the_panel(sandbox):
     make_sqlite(sandbox / 'left' / 'app.db')
     s = make_session(sandbox)

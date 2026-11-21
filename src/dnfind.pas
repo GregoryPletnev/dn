@@ -12,7 +12,15 @@
   hits by their path relative to where the search started. It reports
   itself as local and the names join onto that directory, so view, edit,
   copy, move and delete act on the real files. Enter goes to a hit in its
-  own directory; '..' returns to the starting directory.
+  own directory; '..' returns to the starting directory. A database,
+  archive or image opened from the results returns to them on '..'
+  (KeepWhenLeft, the panel's Back).
+
+  The last results are also kept in an SQLite file in the config
+  directory (FindStorePath: tables search and hits), written through the
+  sqlite3 client when there is one. "Find results" in the Commands menu
+  shows them again, in a later session too; the file opens in a panel as
+  any database does.
 
   The walk does not follow symbolic links to directories and reads
   regular files only (a FIFO would block). While it runs, RunBusyHook
@@ -82,12 +90,22 @@ type
     function IsLocal: Boolean; override;
     function IsRootPath(const Path: AnsiString): Boolean; override;
     function ParentExit(out LocalDir, CursorName: AnsiString): Boolean; override;
+    function KeepWhenLeft: Boolean; override;
     { the full path of a panel entry name }
     function FullPath(const Name: AnsiString): AnsiString;
   end;
 
 const
   FindMaxHits = 100000;
+
+{ the last results on disk: <config>/find.sqlite }
+function FindStorePath: AnsiString;
+{ False when there is no sqlite3 client or the write failed: the results
+  then live for this session only }
+function FindSaveResults(const Root, Title: AnsiString;
+                         const Hits: TFindHits): Boolean;
+function FindLoadResults(out Root, Title: AnsiString;
+                         out Hits: TFindHits): Boolean;
 
 { the form(s); False = cancelled. O keeps the values for the next time. }
 function FindDialog(var O: TFindOptions): Boolean;
@@ -115,7 +133,8 @@ function FindTitle(const O: TFindOptions): AnsiString;
 implementation
 
 uses
-  SysUtils, DateUtils, BaseUnix, Unix, dnpanel, dndialog, dnmagic;
+  SysUtils, DateUtils, BaseUnix, Unix, dnpanel, dndialog, dnmagic,
+  dnconfig, dndb, dndbvfs;
 
 const
   ChunkSize = 65536;
@@ -631,6 +650,93 @@ begin
   LocalDir := Root;
   CursorName := '';
   Result := True;
+end;
+
+function TFindVFS.KeepWhenLeft: Boolean;
+begin
+  Result := True;
+end;
+
+{ --- the results on disk --------------------------------------------------------- }
+
+function FindStorePath: AnsiString;
+begin
+  Result := ConfigDir + '/find.sqlite';
+end;
+
+function StoreConn: TDbConn;
+begin
+  Result := SqliteFileConn(FindStorePath);
+  Result.Name := 'find results';
+end;
+
+function FindSaveResults(const Root, Title: AnsiString;
+                         const Hits: TFindHits): Boolean;
+const
+  Batch = 500;                 // rows per INSERT
+var
+  c: TDbConn;
+  r: TDbResult;
+  err, row: AnsiString;
+  sql: TStringList;
+  i: Integer;
+begin
+  c := StoreConn;
+  sql := TStringList.Create;
+  try
+    sql.Add('BEGIN;');
+    sql.Add('DROP TABLE IF EXISTS search;');
+    sql.Add('DROP TABLE IF EXISTS hits;');
+    sql.Add('CREATE TABLE search(root TEXT, title TEXT, found_at TEXT);');
+    sql.Add('CREATE TABLE hits(path TEXT, is_dir INTEGER);');
+    sql.Add('INSERT INTO search VALUES (' + DbLiteral(Root) + ', ' +
+            DbLiteral(Title) + ', datetime(''now'', ''localtime''));');
+    for i := 0 to High(Hits) do
+    begin
+      row := '(' + DbLiteral(Hits[i].Path) + ', ' +
+             IntToStr(Ord(Hits[i].IsDir)) + ')';
+      if i mod Batch = 0 then row := 'INSERT INTO hits VALUES ' + row;
+      if (i mod Batch = Batch - 1) or (i = High(Hits)) then row := row + ';'
+      else row := row + ',';
+      sql.Add(row);
+    end;
+    sql.Add('COMMIT;');
+    Result := DbQuery(c, sql.Text, 0, r, err, 'Saving the results');
+  finally
+    sql.Free;
+  end;
+end;
+
+function FindLoadResults(out Root, Title: AnsiString;
+                         out Hits: TFindHits): Boolean;
+var
+  c: TDbConn;
+  r: TDbResult;
+  err: AnsiString;
+  i: Integer;
+begin
+  Result := False;
+  Root := '';
+  Title := '';
+  SetLength(Hits, 0);
+  if not FileExists(FindStorePath) then Exit;
+  c := StoreConn;
+  if not DbQuery(c, 'SELECT root, title FROM search LIMIT 1;', 0, r, err,
+                 'Reading the results') then Exit;
+  if (Length(r.Rows) = 0) or (Length(r.Rows[0]) < 2) then Exit;
+  Root := r.Rows[0][0];
+  Title := r.Rows[0][1];
+  if not DbQuery(c, 'SELECT path, is_dir FROM hits ORDER BY rowid;', 0, r, err,
+                 'Reading the results') then Exit;
+  SetLength(Hits, Length(r.Rows));
+  for i := 0 to High(r.Rows) do
+  begin
+    Hits[i].Path := '';
+    Hits[i].IsDir := False;
+    if Length(r.Rows[i]) > 0 then Hits[i].Path := r.Rows[i][0];
+    if Length(r.Rows[i]) > 1 then Hits[i].IsDir := r.Rows[i][1] = '1';
+  end;
+  Result := Length(Hits) > 0;
 end;
 
 end.

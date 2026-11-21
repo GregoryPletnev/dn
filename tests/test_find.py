@@ -163,3 +163,70 @@ def test_a_whole_group_from_the_tree(tree):
         s.wait_text('shot.dat')
     finally:
         s.close()
+
+
+def find_needle(s):
+    open_find(s)
+    goto_field(s, F_TEXT)
+    s.send('needle')
+    s.key('ENTER')
+    s.wait_text('find: ')
+
+
+def test_dotdot_in_a_database_returns_to_the_results(tree):
+    s = make_session(tree)
+    try:
+        open_find(s)
+        s.send('*.bin')                             # the mask: the SQLite file
+        s.key('ENTER')
+        s.wait_text('find: ')
+        s.click_on('sub/archive.bin', panel='left')
+        s.key('F3')                                 # opens as a database
+        s.wait_text('db://archive.bin/')
+        s.click_on('..', panel='left')
+        s.key('ENTER')
+        s.wait_gone('db://archive.bin/')
+        s.wait_text('find: ')                       # the results, not sub/
+        s.wait_for(lambda x: 'archive.bin' in x.cursor_bar_text(),
+                   desc='the cursor is back on the database file')
+        s.click_on('..', panel='left')              # and '..' still leaves them
+        s.key('ENTER')
+        s.wait_gone('find: ')
+    finally:
+        s.close()
+
+
+def test_find_results_come_back_from_the_menu_and_the_next_session(tree):
+    s = make_session(tree)
+    try:
+        find_needle(s)
+        s.click_on('sub/deep.md', panel='left')
+        s.key('ENTER')                              # to the hit: results gone
+        s.wait_gone('find: ')
+        s.click_on('Commands')
+        s.click_on('Find results')
+        s.wait_text('find: ')
+        s.wait_text('sub/deep.md')
+    finally:
+        s.close()
+    assert (tree / 'cfg' / 'find.sqlite').exists()
+    s = make_session(tree)                          # a new session reads the file
+    try:
+        s.wait_text('notes.txt')
+        s.click_on('Commands')
+        s.click_on('Find results')
+        s.wait_text('find: ')
+        s.wait_text('sub/deep.md')
+    finally:
+        s.close()
+
+
+def test_find_results_without_a_saved_search(tree):
+    s = make_session(tree)
+    try:
+        s.wait_text('notes.txt')
+        s.click_on('Commands')
+        s.click_on('Find results')
+        s.wait_text('no saved find results')
+    finally:
+        s.close()

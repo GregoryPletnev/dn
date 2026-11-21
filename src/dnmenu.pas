@@ -48,6 +48,8 @@ const
   cmDisks        = 37;
   cmDatabases    = 38;
   cmFindFile     = 39;
+  cmFindResults  = 40;
+  cmInfo         = 41;
 
 procedure DrawBar(sel: Integer);
 { Modal menu loop; startSel = menu index to open (0-based), returns cm*. }
@@ -120,6 +122,7 @@ begin
   AddMenu('Commands');
   AddItem('User menu', 'F2', cmUserMenu);
   AddItem('Find file...', 'Alt-F7', cmFindFile);
+  AddItem('Find results', '', cmFindResults);
   AddItem('Re-read panels', 'Ctrl-R', cmRereadAll);
   AddItem('UU-encode file', 'Ctrl-F7', cmUUEncode);
   AddItem('UU-decode file', 'Ctrl-F8', cmUUDecode);
@@ -136,10 +139,12 @@ begin
   AddItem('Global menu definition...', '', cmMenuEditGlobal);
   AddItem('Local menu definition...', '', cmMenuEditLocal);
   AddItem('', '', cmNone);            // separator
-  AddItem('Colors...', '', cmColors);
+  AddItem('Fonts/Colors...', '', cmColors);
   AddItem('Highlight groups...', '', cmHighlight);
   AddItem('Syntax highlight', '', cmSyntaxHl);
   AddItem('Screen saver...', '', cmSaverSetup);
+  AddItem('', '', cmNone);            // separator
+  AddItem('Info...', '', cmInfo);
   AddMenu('Right');
   AddItem('Sort by...', 'Alt-S', cmSortRight);
   AddItem('Filter...', '', cmFilterRight);

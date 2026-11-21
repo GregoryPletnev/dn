@@ -8,9 +8,8 @@ unit dnoptions;
 interface
 
 const
-  palClassic = 0;   // white-on-blue DN palette
-  palDark    = 1;   // black background
-  palBW      = 2;   // monochrome
+  { the scheme the old palette=N setting meant, as a DN palette id }
+  LegacyPalettes: array[0..2] of AnsiString = ('norton', 'dark', 'bw');
 
   HlGroupCount = 4;
 
@@ -33,7 +32,7 @@ type
     ColSize: Boolean;           // default panel columns (new panels)
     ColDate: Boolean;
     ColTime: Boolean;
-    Palette: Integer;           // pal* constant
+    Colors: AnsiString;         // DN palette id (dnscreen DnPalettes)
     Hl: THlGroups;              // per-file-type colors
     SyntaxHl: Boolean;          // syntax highlighting in editor/viewer
     SaverDelay: Integer;        // screen saver idle minutes, 0 = off
@@ -45,6 +44,8 @@ type
     LocalSendPort: Integer;     // LocalSend receive port, 0 = receive off
     LocalSendName: AnsiString;  // device name peers see
     PathHintShown: Boolean;     // the "not in PATH" hint was shown once
+    Font: AnsiString;           // dnfonts catalog id, '' = terminal's own
+    FontSize: Integer;          // points, for outline fonts
   end;
 
 const
@@ -63,7 +64,7 @@ var
     ColSize: True;
     ColDate: True;
     ColTime: False;
-    Palette: palClassic;
+    Colors: 'default';
     Hl: (
       (Mask: '*.sh,*.command,*.py,*.pl,*.rb'; Color: 2),                  // green
       (Mask: '*.zip,*.tar,*.tgz,*.tbz,*.gz,*.bz2,*.xz,*.7z,*.rar'; Color: 3), // yellow
@@ -79,7 +80,9 @@ var
     PlayerEqBands: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     LocalSendPort: 0;
     LocalSendName: 'DN';
-    PathHintShown: False
+    PathHintShown: False;
+    Font: '';
+    FontSize: 14
   );
 
 procedure OptLoad;
@@ -130,13 +133,22 @@ begin
     Opt.ColSize := AsBool(L.Values['col_size'], Opt.ColSize);
     Opt.ColDate := AsBool(L.Values['col_date'], Opt.ColDate);
     Opt.ColTime := AsBool(L.Values['col_time'], Opt.ColTime);
-    p := StrToIntDef(L.Values['palette'], Opt.Palette);
-    if (p >= palClassic) and (p <= palBW) then Opt.Palette := p;
+    if L.Values['colors'] <> '' then
+      Opt.Colors := L.Values['colors']
+    else if L.Values['palette'] <> '' then
+    begin
+      { before the DN palettes: 0 classic blue (the Norton look), 1 dark,
+        2 black & white }
+      p := StrToIntDef(L.Values['palette'], 0);
+      if (p >= 0) and (p <= 2) then Opt.Colors := LegacyPalettes[p];
+    end;
     Opt.SyntaxHl := AsBool(L.Values['syntax_hl'], Opt.SyntaxHl);
     p := StrToIntDef(L.Values['saver_delay'], Opt.SaverDelay);
     if (p >= 0) and (p <= 999) then Opt.SaverDelay := p;
     p := StrToIntDef(L.Values['saver_type'], Opt.SaverType);
-    if (p >= 0) and (p <= 2) then Opt.SaverType := p;
+    { dnsaver kinds 0..8 are wired: 0..2 the built-ins, 3..5 the DOS
+      savers, 6 bundles, 7 CHIK, 8 ASCOPE; the rest are unimplemented. }
+    if (p >= 0) and (p <= 8) then Opt.SaverType := p;
     p := StrToIntDef(L.Values['player_volume'], Opt.PlayerVolume);
     if (p >= 0) and (p <= 100) then Opt.PlayerVolume := p;
     p := StrToIntDef(L.Values['player_viz'], Opt.PlayerViz);
@@ -154,6 +166,9 @@ begin
     if L.Values['localsend_name'] <> '' then
       Opt.LocalSendName := L.Values['localsend_name'];
     Opt.PathHintShown := AsBool(L.Values['path_hint_shown'], Opt.PathHintShown);
+    Opt.Font := L.Values['font'];
+    p := StrToIntDef(L.Values['font_size'], Opt.FontSize);
+    if (p >= 6) and (p <= 72) then Opt.FontSize := p;
     for i := 1 to HlGroupCount do
     begin
       k := 'hl' + IntToStr(i);
@@ -184,7 +199,7 @@ begin
     L.Add('col_size=' + BoolStr(Opt.ColSize));
     L.Add('col_date=' + BoolStr(Opt.ColDate));
     L.Add('col_time=' + BoolStr(Opt.ColTime));
-    L.Add('palette=' + IntToStr(Opt.Palette));
+    L.Add('colors=' + Opt.Colors);
     L.Add('syntax_hl=' + BoolStr(Opt.SyntaxHl));
     L.Add('saver_delay=' + IntToStr(Opt.SaverDelay));
     L.Add('saver_type=' + IntToStr(Opt.SaverType));
@@ -197,6 +212,8 @@ begin
     L.Add('localsend_port=' + IntToStr(Opt.LocalSendPort));
     L.Add('localsend_name=' + Opt.LocalSendName);
     L.Add('path_hint_shown=' + BoolStr(Opt.PathHintShown));
+    L.Add('font=' + Opt.Font);
+    L.Add('font_size=' + IntToStr(Opt.FontSize));
     for i := 1 to HlGroupCount do
     begin
       k := 'hl' + IntToStr(i);

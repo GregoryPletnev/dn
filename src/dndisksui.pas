@@ -198,7 +198,7 @@ var
     line: AnsiString;
   begin
     if Assigned(RedrawBase) then RedrawBase();
-    PutStr(y, x, bxTL + Rep(bxH, w - 2) + bxTR, cpMenuBar);
+    PutStr(y, x, bxTL + Rep(bxH, w - 2) + bxTR, cpDlgFrame);
     PutStr(y, x + (w - 8) div 2, ' Disks ', cpTitleAct);
     line := PadRight('Device', ColDev) + ' ' +
       Utf8PadRight('Label', ColName) + ' ' +
@@ -209,28 +209,28 @@ var
     for j := 0 to ph - 1 do
     begin
       row := y + 2 + j;
-      PutStr(row, x, bxV, cpMenuBar);
-      PutStr(row, x + w - 1, bxV, cpMenuBar);
+      PutStr(row, x, bxV, cpDlgFrame);
+      PutStr(row, x + w - 1, bxV, cpDlgFrame);
       if top + j <= High(Disks) then
       begin
-        if top + j = cur then pair := cpMenuSel else pair := cpMenuBar;
+        if top + j = cur then pair := cpDlgSel else pair := cpDlgList;
         PutStr(row, x + 1, PadRight(' ' + RowText(top + j), w - 2), pair);
       end
       else
-        PutStr(row, x + 1, StringOfChar(' ', w - 2), cpMenuBar);
+        PutStr(row, x + 1, StringOfChar(' ', w - 2), cpDlgList);
     end;
     if High(Disks) < 0 then
     begin
       line := 'No removable media found.';
-      PutStr(y + ph div 2 + 1, x + (w - Length(line)) div 2, line, cpMenuBar);
+      PutStr(y + ph div 2 + 1, x + (w - Length(line)) div 2, line, cpDialog);
       line := 'Insert a USB stick or press R to refresh.';
-      PutStr(y + ph div 2 + 2, x + (w - Length(line)) div 2, line, cpMenuBar);
+      PutStr(y + ph div 2 + 2, x + (w - Length(line)) div 2, line, cpDialog);
     end;
-    PutStr(y + h - 2, x, bxSepL + Rep(bxSepH, w - 2) + bxSepR, cpMenuBar);
-    PutStr(y + h - 1, x, bxSBL + Rep(bxSepH, w - 2) + bxSBR, cpMenuBar);
-    PutStr(y + h - 2, x + 1, StringOfChar(' ', w - 2), cpMenuBar);
+    PutStr(y + h - 2, x, bxSepL + Rep(bxSepH, w - 2) + bxSepR, cpDlgFrame);
+    PutStr(y + h - 1, x, bxSBL + Rep(bxSepH, w - 2) + bxSBR, cpDlgFrame);
+    PutStr(y + h - 2, x + 1, StringOfChar(' ', w - 2), cpDialog);
     for j := 0 to High(btns) do
-      PutStr(y + h - 2, btns[j].X0, btns[j].Cap, cpMenuSel);
+      PutStr(y + h - 2, btns[j].X0, btns[j].Cap, cpDlgBtnSel);
     refresh;
   end;
 

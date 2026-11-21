@@ -8,7 +8,7 @@ uses
   {$ifdef unix}cthreads, clocale, Unix, BaseUnix, termio,{$endif}
   SysUtils, Classes, ncurses,
   dnscreen, dnpanel, dnmenu, dndialog, dnfileops, dntetris,
-  dnwin, dnview, dnedit, dnconfig, dnoptions, dnvfs, dnarcvfs, dnmount,
+  dnwin, dnview, dnedit, dnconfig, dnoptions, dntermid, dnfonts, dnvfs, dnarcvfs, dnmount,
   dnsftp, dnsession, dnsessui, dnuu, dnusermenu, dnsaver, dnconsole, dngpm,
   dnplaylist, dnplayer, dnlsproto, dnls, dnlsdisc, dnlsident, dnpath,
   dndb, dndbvfs, dngrid, dndbui, dnvault, dnfind,
@@ -141,18 +141,26 @@ end;
 procedure DrawMenuBar;
 begin
   DrawBar(-1);
-  PutStr(0, COLS - 9, FormatDateTime('hh:nn:ss', Now), cpMenuBar);
+  PutStr(0, COLS - 9, FormatDateTime('hh:nn:ss', Now), cpClock);
 end;
 
 procedure DrawCmdLine;
 var
-  s: AnsiString;
+  s, prompt: AnsiString;
+  pl: Integer;
 begin
   FillRow(LINES - 2, 0, COLS, cpCmdLine);
-  s := ActiveP.DisplayPath + '>' + CmdLine;
+  prompt := ActiveP.DisplayPath + '>';
+  s := prompt + CmdLine;
+  pl := Length(prompt);
   if Length(s) > COLS - 2 then
+  begin
+    pl := pl - (Length(s) - (COLS - 2));
     s := Copy(s, Length(s) - (COLS - 3), COLS - 2);
+  end;
   PutStr(LINES - 2, 0, s, cpCmdLine);
+  { DN draws the directory brighter than the typed command }
+  if pl > 0 then PutStr(LINES - 2, 0, Copy(s, 1, pl), cpCmdPrompt);
   PutStr(LINES - 2, Length(s), ' ', cpCursor);   // block cursor
 end;
 
@@ -908,6 +916,25 @@ var
     Hidden: False; Scope: fsCurrent; DateAfter: ''; DateBefore: '';
     SizeGreater: ''; SizeLess: ''; OnlyReadOnly: False; OnlyExecutable: False);
 
+{ the last results, kept so that the panel can show them again after the
+  user went to a hit; FindSaveResults keeps them across sessions }
+var
+  KeptHits: TFindHits;
+  KeptRoot, KeptTitle: AnsiString;
+
+{ Commands > Find results: the last search in the active panel again }
+procedure DoFindResults;
+begin
+  if Length(KeptHits) = 0 then
+    FindLoadResults(KeptRoot, KeptTitle, KeptHits);
+  if Length(KeptHits) = 0 then
+  begin
+    MsgBox('Find results', 'There are no saved find results.', ['OK']);
+    Exit;
+  end;
+  ActiveP.SetVfs(TFindVFS.CreateFind(KeptRoot, KeptTitle, KeptHits), KeptRoot);
+end;
+
 { Find File (Alt-F7): the DN dialog, then the hits in the active panel }
 procedure DoFindFile;
 var
@@ -975,7 +1002,11 @@ begin
     if done then MsgBox('Find file', 'No files found.', ['OK']);
     Exit;
   end;
-  ActiveP.SetVfs(TFindVFS.CreateFind(root, FindTitle(LastFind), hits), root);
+  KeptHits := hits;
+  KeptRoot := root;
+  KeptTitle := FindTitle(LastFind);
+  FindSaveResults(KeptRoot, KeptTitle, KeptHits);
+  ActiveP.SetVfs(TFindVFS.CreateFind(root, KeptTitle, hits), root);
 end;
 
 { Enter in the find results: a directory opens for real, a file is shown
@@ -1579,6 +1610,7 @@ begin
     L.Add('  Ctrl-T           Tetris');
     L.Add('  Ctrl-Q           Databases (PostgreSQL, ClickHouse, SQLite)');
     L.Add('  Alt-F7           Find file (name, text, hex, type by content)');
+    L.Add('                   Commands > Find results shows the last hits again');
     L.Add('  Alt-F8           stop the media player');
     L.Add('  F1               this help');
     L.Add('  F2               user menu (dn.mnu, see below)');
@@ -1711,16 +1743,193 @@ begin
     SetHlPair(i, Opt.Hl[i].Color);
 end;
 
-procedure DoColors;
+function FontLabel: AnsiString;
 var
   i: Integer;
 begin
-  i := MsgBox('Colors', 'Color scheme:', ['Classic', 'Dark', 'Mono']);
+  i := FontIndex(Opt.Font);
+  if i < 0 then Result := 'terminal default'
+  else Result := FontCatalog[i].Name;
+end;
+
+{ a list that keeps the cursor between visits: -1 on Esc }
+function PickRow(const Title: AnsiString; L: TStrings; var Cur: Integer): Integer;
+begin
+  Result := ListDialog(Title, L, Cur);
+  if Result >= 0 then Cur := Result;
+end;
+
+{ the saved font, at startup: no download, no messages }
+procedure ApplyOptFontQuiet;
+var
+  i: Integer;
+  t: TTermInfo;
+  msg: AnsiString;
+begin
+  i := FontIndex(Opt.Font);
   if i < 0 then Exit;
-  Opt.Palette := i;
-  ApplyPalette(Opt.Palette);
+  t := DetectTermNow;
+  if FontReady(FontCatalog[i]) and FontFits(FontCatalog[i], t.Kind) then
+    FontApply(FontCatalog[i], Opt.FontSize, t, msg);
+end;
+
+{ try font e at Size: download when needed (asks first), apply, report.
+  True when the font is in use; False on Esc or an error (the caller
+  stays on its screen). }
+function TryFont(const e: TFontEntry; Size: Integer): Boolean;
+var
+  t: TTermInfo;
+  msg: AnsiString;
+begin
+  Result := False;
+  t := DetectTermNow;
+  if not FontFits(e, t.Kind) then
+  begin
+    FontApply(e, Size, t, msg);           // only builds the reason
+    MsgBox('Font', e.Name + #10 + msg, ['OK']);
+    Exit;
+  end;
+  if not FontReady(e) then
+  begin
+    if MsgBox('Font', 'Download ' + e.Name + ' (' + e.License + ', ' +
+              e.Author + ')?' + #10 + e.Url, ['Download', 'Cancel']) <> 0 then
+      Exit;
+    if not FontDownload(e, msg) then
+    begin
+      if msg <> FontCancelled then MsgBox('Font', e.Name + #10 + msg, ['OK']);
+      Exit;
+    end;
+  end;
+  Result := FontApply(e, Size, t, msg);
+  if Result then
+    MsgBox('Font', e.Name + ', ' + IntToStr(Size) + ' pt' + #10 + msg, ['OK'])
+  else
+    MsgBox('Font', e.Name + #10 + msg, ['OK']);
+end;
+
+{ the font list; Esc or a failed pick stays here / goes back one step }
+procedure DoFontPick;
+var
+  L: TStringList;
+  i, idx, cur: Integer;
+  t: TTermInfo;
+  e: TFontEntry;
+  st: AnsiString;
+begin
+  t := DetectTermNow;
+  cur := FontIndex(Opt.Font) + 1;
+  L := TStringList.Create;
+  try
+    repeat
+      L.Clear;
+      L.Add('Terminal default');
+      for i := 0 to High(FontCatalog) do
+      begin
+        e := FontCatalog[i];
+        if not FontFits(e, t.Kind) then st := 'not for this terminal'
+        else if e.Bundled <> '' then st := 'bundled'
+        else if FontReady(e) then st := 'downloaded'
+        else st := 'download';
+        L.Add(PadRight(e.Name, 28) + PadRight(e.License, 22) + st);
+      end;
+      idx := PickRow('Font (' + t.Name + ')', L, cur);
+      if idx < 0 then Exit;
+      if idx = 0 then
+      begin
+        FontRestore;
+        Opt.Font := '';
+        OptSave;
+        Exit;
+      end;
+      if TryFont(FontCatalog[idx - 1], Opt.FontSize) then
+      begin
+        Opt.Font := FontCatalog[idx - 1].Id;
+        OptSave;
+        Exit;
+      end;
+    until False;
+  finally
+    L.Free;
+  end;
+end;
+
+{ a bad number keeps the input open with what was typed; Esc goes back }
+procedure DoFontSize;
+var
+  v: AnsiString;
+  n, i: Integer;
+begin
+  v := IntToStr(Opt.FontSize);
+  repeat
+    if not InputBox('Font size', 'Size in points (6-72):', v) then Exit;
+    n := StrToIntDef(Trim(v), 0);
+    if (n < 6) or (n > 72) then
+    begin
+      MsgBox('Font size', 'Enter a number from 6 to 72', ['OK']);
+      Continue;
+    end;
+    i := FontIndex(Opt.Font);
+    { the size is kept only when the font takes it (or none is chosen) }
+    if (i >= 0) and FontFits(FontCatalog[i], DetectTermNow.Kind) and
+       not TryFont(FontCatalog[i], n) then Continue;
+    Opt.FontSize := n;
+    OptSave;
+    Exit;
+  until False;
+end;
+
+function PaletteIdx: Integer;
+begin
+  Result := DnPaletteIndex(Opt.Colors);
+  if Result < 0 then Result := 0;
+end;
+
+{ the DN 1.51 palettes; Esc goes back, the cursor starts on the current one }
+procedure DoColorScheme;
+var
+  L: TStringList;
+  i, cur: Integer;
+begin
+  L := TStringList.Create;
+  try
+    for i := 0 to DnPalCount - 1 do L.Add(DnPalettes[i].Name);
+    cur := PaletteIdx;
+    i := ListDialog('Color scheme', L, cur);
+  finally
+    L.Free;
+  end;
+  if i < 0 then Exit;
+  Opt.Colors := DnPalettes[i].Id;
+  ApplyPalette(i);
   ApplyHlPairs;
   OptSave;
+end;
+
+{ Options > Fonts/Colors: stays open after each sub-dialog; Esc closes }
+procedure DoColors;
+var
+  L: TStringList;
+  cur: Integer;
+begin
+  cur := 0;
+  L := TStringList.Create;
+  try
+    repeat
+      L.Clear;
+      L.Add('Font: ' + FontLabel);
+      L.Add('Font size: ' + IntToStr(Opt.FontSize));
+      L.Add('Color scheme: ' + DnPalettes[PaletteIdx].Name);
+      case PickRow('Fonts/Colors', L, cur) of
+        0: DoFontPick;
+        1: DoFontSize;
+        2: DoColorScheme;
+      else
+        Exit;
+      end;
+    until False;
+  finally
+    L.Free;
+  end;
 end;
 
 procedure DoHighlight;
@@ -1730,11 +1939,66 @@ begin
   OptSave;
 end;
 
+{ Options > Info: what DN knows about the terminal it runs in. }
+procedure DoInfo;
+var
+  t: TTermInfo;
+  m, s, tty: AnsiString;
+
+  procedure Line(const k, v: AnsiString);
+  begin
+    if v = '' then m := m + PadRight(k, 14) + '-' + #10
+    else m := m + PadRight(k, 14) + v + #10;
+  end;
+
+begin
+  t := DetectTermNow;
+  tty := CurrentTty;
+  m := '';
+  s := t.Name;
+  if t.Version <> '' then s := s + ' ' + t.Version;
+  Line('Terminal:', s);
+  if t.Source <> '' then Line('Detected by:', t.Source);
+  if t.Mux <> '' then Line('Multiplexer:', t.Mux);
+  s := FontMethod(t.Kind);
+  if s = '' then s := 'not supported';
+  if (t.Mux <> '') and (t.Kind <> tkLinuxConsole) and (s <> 'not supported') then
+    s := s + ' (via ' + t.Mux + ' passthrough)';
+  Line('Font change:', s);
+  Line('TERM:', GetEnvironmentVariable('TERM'));
+  Line('TERM_PROGRAM:', GetEnvironmentVariable('TERM_PROGRAM'));
+  Line('TTY:', tty);
+  Line('Size:', IntToStr(COLS) + 'x' + IntToStr(LINES));
+  if has_colors then
+    Line('Colors:', IntToStr(COLORS) + ', ' + IntToStr(COLOR_PAIRS) + ' pairs')
+  else
+    Line('Colors:', 'none');
+  s := GetEnvironmentVariable('LC_ALL');
+  if s = '' then s := GetEnvironmentVariable('LC_CTYPE');
+  if s = '' then s := GetEnvironmentVariable('LANG');
+  Line('Locale:', s);
+  if GpmActive then Line('Mouse:', 'gpm (Linux console)')
+  else Line('Mouse:', 'xterm protocol');
+  SetLength(m, Length(m) - 1);
+  MsgBox('Info', m, ['OK']);
+end;
+
+procedure SaverSetupPreview(Cur, py, px, ph, pw: Integer); forward;
+
+{ the picker lists only implemented savers, but their dnsaver kinds are not
+  contiguous. This maps a list position to the sv* kind; index 0 is the
+  disabled entry (svOff). }
+const
+  SaverKindByPos: array[0..9] of Integer =
+    (svOff, svStarSky, svClock, svBlank, svWater, svFire, svColines,
+     svBundles, svChik, svAscope);
+
+
+
 procedure DoSaverSetup;
 var
   L: TStringList;
-  idx: Integer;
-  m: AnsiString;
+  idx, mins, start, i: Integer;
 begin
   L := TStringList.Create;
   try
@@ -1742,7 +2006,23 @@ begin
     L.Add('Starry sky');
     L.Add('Clock');
     L.Add('Blank screen');
-    idx := ListDialog('Screen saver', L);
+    L.Add('Water (DOS AZ_WATER)');
+    L.Add('Fire (DOS AZ_FIRE)');
+    L.Add('Color lines (DOS COLINES)');
+    L.Add('Bundles (DOS BUNDLES)');
+    L.Add('CHIK.SS walking hole');
+    L.Add('Oscilloscope (DOS ASCOPE)');
+    mins := Opt.SaverDelay;
+    if mins <= 0 then mins := 5;
+    { open on the configured saver, so OK without a move keeps it;
+      "Off" only when the saver is disabled }
+    start := 0;
+    if Opt.SaverDelay > 0 then
+      for i := 1 to High(SaverKindByPos) do
+        if SaverKindByPos[i] = Opt.SaverType then start := i;
+    idx := LiveListDialog('Screen saver', L, nil, 120, 24,
+                          start, @SaverSetupPreview, 46,
+                          'Start after minutes (Tab):', @mins);
   finally
     L.Free;
   end;
@@ -1751,14 +2031,19 @@ begin
     Opt.SaverDelay := 0
   else
   begin
-    Opt.SaverType := idx - 1;
-    if Opt.SaverDelay <= 0 then Opt.SaverDelay := 5;
-    m := IntToStr(Opt.SaverDelay);
-    if InputBox('Screen saver', 'Start after minutes of inactivity:', m) then
-      Opt.SaverDelay := StrToIntDef(m, Opt.SaverDelay);
-    if Opt.SaverDelay < 0 then Opt.SaverDelay := 0;
+    Opt.SaverType := SaverKindByPos[idx];
+    if mins <= 0 then mins := 5;
+    Opt.SaverDelay := mins;
   end;
   OptSave;
+end;
+
+{ the picker's live preview: the focused row minus the "Off" entry is a
+  sv* saver kind; row 0 shows the disabled state }
+procedure SaverSetupPreview(Cur, py, px, ph, pw: Integer);
+begin
+  if (Cur < 0) or (Cur > High(SaverKindByPos)) then Exit;
+  SaverPreviewDraw(SaverKindByPos[Cur], py, px, ph, pw);
 end;
 
 { --- user menu (F2) ------------------------------------------------------ }
@@ -1884,6 +2169,7 @@ begin
     cmDisks: DoDisks;
     cmDatabases: DoDatabases;
     cmFindFile: DoFindFile;
+    cmFindResults: DoFindResults;
     cmUUEncode: DoUUEncode;
     cmUUDecode: DoUUDecode;
     cmPanelSetup: DoPanelSetup;
@@ -1897,6 +2183,7 @@ begin
     cmColumnsRight: ColumnsDialog(RightP);
     { cmSyntaxHl is a checkbox: RunMenuBar toggles it in place }
     cmSaverSetup: DoSaverSetup;
+    cmInfo: DoInfo;
     cmPlayer: DoPlayer;
     cmLocalSend: DoLocalSend;
     cmBrowser: DoBrowser;
@@ -2589,8 +2876,9 @@ begin
   { saved DB passwords: the master password prompt; DB password prompt }
   VaultAskHook := @AskVaultMaster;
   DbPasswordHook := @AskDbPassword;
-  ApplyPalette(Opt.Palette);
+  ApplyPalette(PaletteIdx);
   ApplyHlPairs;
+  ApplyOptFontQuiet;
   RedrawBase := @DrawBase;
   try
     { with a player open the loop wakes 4 times a second (visualizer, track
@@ -2677,6 +2965,7 @@ begin
         end;
     until Quit;
   finally
+    FontRestore;
     ScrDone;
   end;
 

@@ -7,7 +7,7 @@ program unittests;
 uses
   BaseUnix, SysUtils, Classes, dnscreen, dnpanel, dnfileops, dnuu, dnvfs, dnsftp,
   dnsession, dnusermenu, dnhighlite, dnplaylist, dnaudio, dnlsproto,
-  dnhtml, dncss, dnhttp, dnlayout, dnpath, dnsha256, dnlsident, process, dncrypto, dnvault, dndb, dnfind, dnmagic;
+  dnhtml, dncss, dnhttp, dnlayout, dnpath, dnsha256, dnlsident, process, dncrypto, dnvault, dndb, dnfind, dnmagic, dntermid, dnfonts, dndossav, dnbundlessav, dnchiksav, dnascopesav;
 
 var
   Failures: Integer = 0;
@@ -888,6 +888,8 @@ end;
 
 procedure TestDb;
 var
+  fh, fh2: TFindHits;
+  froot, ftitle: AnsiString;
   rows: TCsvRows;
   a, b: TDbConns;
   c: TDbConn;
@@ -960,10 +962,12 @@ begin
         (Length(r.Rows) = 1), 'sqlite max rows');
   Check(not DbQuery(c, 'SELECT * FROM nope;', 0, r, err), 'sqlite error');
   Check(Pos('no such table', err) > 0, 'sqlite error text: ' + err);
-  Check(DbListObjects(c, '', objs, err), 'sqlite objects ' + err);
+  Check(DbListObjects(c, '', objs, err, True), 'sqlite objects ' + err);
   CheckEq(IntToStr(Length(objs)), '2', 'sqlite object count');
   CheckEq(objs[0].Name + '/' + objs[0].Kind, 'people/table', 'sqlite table');
   CheckEq(objs[1].Name + '/' + objs[1].Kind, 'v/view', 'sqlite view');
+  CheckEq(IntToStr(objs[0].Rows), '2', 'sqlite table row count');
+  CheckEq(IntToStr(objs[1].Rows), '-1', 'sqlite view is not counted');
   csv := dbf + '.csv';
   Check(DbExportCsv(c, '', 'people', csv, err), 'sqlite export ' + err);
   ParseCsv(FileBytes(csv), rows);
@@ -971,6 +975,22 @@ begin
   CheckEq(rows[2][1], 'Bo, "the" 2nd', 'sqlite export value');
   DeleteFile(csv);
   DeleteFile(dbf);
+
+  { the find results kept in <config>/find.sqlite }
+  SetLength(fh, 2);
+  fh[0].Path := '/tmp/it''s, "odd".txt'; fh[0].IsDir := False;
+  fh[1].Path := '/tmp/dir'; fh[1].IsDir := True;
+  Check(FindSaveResults('/tmp', 'find: x', fh), 'find store save');
+  Check(FindLoadResults(froot, ftitle, fh2), 'find store load');
+  CheckEq(froot + '|' + ftitle, '/tmp|find: x', 'find store search row');
+  CheckEq(IntToStr(Length(fh2)), '2', 'find store hit count');
+  CheckEq(fh2[0].Path, fh[0].Path, 'find store quoted path');
+  Check(fh2[1].IsDir and not fh2[0].IsDir, 'find store is_dir');
+  SetLength(fh, 1);                      // a new search replaces the old one
+  Check(FindSaveResults('/', 'find: y', fh), 'find store overwrite');
+  Check(FindLoadResults(froot, ftitle, fh2) and (Length(fh2) = 1) and
+        (ftitle = 'find: y'), 'find store keeps the last search only');
+  DeleteFile(FindStorePath);
 end;
 
 procedure TestWidth;
@@ -2607,12 +2627,475 @@ begin
           'ExecutablePath is the real path of the test binary');
 end;
 
+var
+  FakeEnv: TStringList = nil;
+
+function FakeEnvGet(const Name: AnsiString): AnsiString;
+begin
+  Result := FakeEnv.Values[Name];
+end;
+
+function TermOf(const Vars: array of AnsiString; const Tty: AnsiString): TTermInfo;
+var
+  i: Integer;
+begin
+  FakeEnv.Clear;
+  for i := 0 to High(Vars) do FakeEnv.Add(Vars[i]);
+  Result := DetectTerm(@FakeEnvGet, Tty);
+end;
+
+procedure TestDetectTerm;
+var
+  t: TTermInfo;
+begin
+  FakeEnv := TStringList.Create;
+  try
+    t := TermOf(['TERM=linux'], '/dev/tty1');
+    Check(t.Kind = tkLinuxConsole, 'term: linux console by TERM');
+    t := TermOf(['TERM=screen'], '/dev/tty3');
+    Check(t.Kind = tkLinuxConsole, 'term: linux console by tty name');
+    t := TermOf(['TERM=xterm-256color'], '/dev/ttys003');
+    Check(t.Kind = tkXtermCompat, 'term: macOS pty is not a console');
+    t := TermOf(['TERM=xterm-256color', 'TERM_PROGRAM=iTerm.app',
+                 'TERM_PROGRAM_VERSION=3.5.4'], '/dev/ttys001');
+    Check((t.Kind = tkITerm2) and (t.Version = '3.5.4'), 'term: iTerm2 + version');
+    t := TermOf(['TERM=xterm-256color', 'TERM_PROGRAM=Apple_Terminal'], '');
+    Check(t.Kind = tkAppleTerminal, 'term: Terminal.app');
+    t := TermOf(['TERM=xterm-kitty'], '');
+    Check(t.Kind = tkKitty, 'term: kitty by TERM');
+    t := TermOf(['TERM=tmux-256color', 'TMUX=/tmp/tmux-501/default,1,0',
+                 'TERM_PROGRAM=tmux', 'KITTY_WINDOW_ID=1'], '/dev/ttys004');
+    Check((t.Kind = tkKitty) and (t.Mux = 'tmux'), 'term: kitty under tmux');
+    t := TermOf(['TERM=tmux-256color', 'TMUX=x', 'TERM_PROGRAM=tmux',
+                 'TERM_PROGRAM_VERSION=3.4'], '');
+    Check((t.Kind = tkUnknown) and (t.Version = ''), 'term: tmux version is not the terminal''s');
+    t := TermOf(['TERM=screen', 'STY=123.pts-0'], '/dev/pts/0');
+    Check(t.Mux = 'GNU screen', 'term: GNU screen');
+    t := TermOf(['TERM=xterm', 'XTERM_VERSION=XTerm(390)'], '/dev/pts/1');
+    Check((t.Kind = tkXterm) and (t.Version = 'XTerm(390)'), 'term: real xterm');
+    t := TermOf(['TERM=xterm-256color', 'VTE_VERSION=7600'], '');
+    Check(t.Kind = tkVte, 'term: VTE');
+    t := TermOf(['TERM=rxvt-unicode-256color'], '');
+    Check(t.Kind = tkUrxvt, 'term: urxvt');
+    t := TermOf(['TERM=dumb'], '');
+    Check(t.Kind = tkUnknown, 'term: unknown');
+    Check(FontMethod(tkVSCode) = '', 'term: no font method for VS Code');
+    Check(FontMethod(tkLinuxConsole) <> '', 'term: console font method');
+  finally
+    FreeAndNil(FakeEnv);
+  end;
+end;
+
+procedure TestFontCatalog;
+var
+  i, j: Integer;
+  e: TFontEntry;
+  ok: Boolean;
+begin
+  ok := True;
+  for i := 0 to High(FontCatalog) do
+    for j := i + 1 to High(FontCatalog) do
+      if FontCatalog[i].Id = FontCatalog[j].Id then ok := False;
+  Check(ok, 'fonts: unique ids');
+  for i := 0 to High(FontCatalog) do
+  begin
+    e := FontCatalog[i];
+    Check(e.License <> '', 'fonts: license named for ' + e.Id);
+    if e.Bundled = '' then
+    begin
+      Check(Copy(e.Url, 1, 8) = 'https://', 'fonts: https url for ' + e.Id);
+      Check(Length(e.Sha256) = 64, 'fonts: pinned sha for ' + e.Id);
+    end
+    else
+      Check(FileExists('assets/fonts/' + e.Bundled),
+            'fonts: bundled file present for ' + e.Id);
+    if e.Kind = fkOutline then
+      Check(e.PsName <> '', 'fonts: PostScript name for ' + e.Id);
+  end;
+  Check(FontIndex('vga') = 0, 'fonts: index by id');
+  Check(FontIndex('nope') = -1, 'fonts: unknown id');
+  Check(FontFits(FontCatalog[FontIndex('spleen')], tkLinuxConsole),
+        'fonts: PSF on the console');
+  Check(not FontFits(FontCatalog[FontIndex('spleen')], tkITerm2),
+        'fonts: no PSF in iTerm2');
+  Check(not FontFits(FontCatalog[FontIndex('vga')], tkLinuxConsole),
+        'fonts: no TTF on the console');
+  Check(ShaMatches('abc',
+    'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD'),
+        'fonts: sha check, any case');
+  Check(not ShaMatches('abd',
+    'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'),
+        'fonts: sha mismatch');
+  Check(not ShaMatches('abc', ''), 'fonts: empty sha never matches');
+  Check(TmuxWrap(#27']50;x'#7) = #27'Ptmux;'#27#27']50;x'#7#27'\',
+        'fonts: tmux passthrough doubles ESC');
+end;
+
+procedure TestDnPalettes;
+var
+  d, n: Integer;
+begin
+  Check(DnPalCount = 11, 'pal: 11 DN 1.51 palettes');
+  d := DnPaletteIndex('default');
+  n := DnPaletteIndex('norton');
+  Check((d = 0) and (n > 0), 'pal: ids');
+  Check(DnPaletteIndex('nope') = -1, 'pal: unknown id');
+  { DEFAULT.PAL is CColor of DNAPP.PAS: spot-check the chain results }
+  Check(DnPairAttr(d, cpFile) = $87, 'pal: default file = light gray on dark gray');
+  Check(DnPairAttr(d, cpCursor) = $30, 'pal: default cursor = black on cyan');
+  Check(DnPairAttr(d, cpSelected) = $8E, 'pal: default selected = yellow');
+  Check(DnPairAttr(d, cpMenuBar) = $70, 'pal: default menu = black on light gray');
+  Check(DnPairAttr(d, cpFKeyNum) = $74, 'pal: default hotkeys red');
+  Check(DnPairAttr(d, cpTitleAct) = $3F, 'pal: default active path');
+  Check(DnPairAttr(d, cpInfo) = $8B, 'pal: default info line light cyan');
+  Check(DnPairAttr(n, cpFile) = $1B, 'pal: Norton file = light cyan on blue');
+  Check(DnPairAttr(n, cpDir) = $1F, 'pal: Norton dir = white on blue');
+  Check(DnPairAttr(d, cpCmdLine) = $07, 'pal: command line fixed 07');
+  { terminal colors: VGA order -> ANSI, bright = +8, custom DAC -> 256 }
+  Check(DnTermColor(d, 1, 16) = 4, 'pal: VGA blue is ANSI 4');
+  Check(DnTermColor(d, 14, 16) = 11, 'pal: VGA yellow is ANSI 11');
+  Check(DnTermColor(d, 14, 8) = 3, 'pal: 8 colors drop brightness');
+  Check(DnTermColor(DnPaletteIndex('blue'), 9, 256) = 62,
+        'pal: _BLUE light blue rgb(85,85,202) -> xterm 62');
+  Check(DnTermColor(DnPaletteIndex('blue'), 9, 16) = 12,
+        'pal: no 256 colors -> plain ANSI');
+end;
+
 procedure TestIsAppBundle;
 begin
   Check(IsAppBundle('/Applications/DN.app/Contents/MacOS/dn'),
         'IsAppBundle detects a bundle');
   Check(not IsAppBundle('/usr/local/bin/dn'), 'IsAppBundle rejects a plain path');
   Check(not IsAppBundle('/opt/DN/dn'), 'IsAppBundle needs the .app component');
+end;
+
+{ ground-truth vectors from tools/re/water_seed.py and the bit-exact
+  32-bit register replay of AZ_WATER.ASM / AZ_FIRE.ASM }
+procedure TestDosSavers;
+var
+  S: TWaveSim;
+  i: Integer;
+  csum: LongInt;
+  first12: array[0..11] of Integer =
+    (333, 344, 349, 352, 370, 405, 410, 412, 413, 419, 425, 426);
+  firstVals: array[0..11] of Byte = (2, 0, 2, 1, 0, 0, 0, 1, 0, 0, 2, 1);
+
+  function Checksum: LongInt;
+  var
+    j: Integer;
+  begin
+    Result := 0;
+    for j := 0 to High(S.Cur) do Inc(Result, S.Cur[j]);
+  end;
+
+begin
+  WaveInit(S, dssWater, 320, 100);
+  Check(S.Dx = $9054, 'water seed dx after 2000 drops');
+  Check(S.Dy = $561A, 'water seed cx after 2000 drops');
+  for i := 0 to 11 do
+    Check(S.Cur[first12[i]] = firstVals[i], 'water seed drop position');
+  csum := Checksum;
+  Check(csum = 243451, 'water seed image checksum');
+
+  WaveStep(S, dssWater);
+  Check(Checksum = 271088, 'water frame 1 checksum');
+  WaveStep(S, dssWater);
+  Check(Checksum = 285972, 'water frame 2 checksum');
+  WaveStep(S, dssWater);
+  Check(Checksum = 298133, 'water frame 3 checksum');
+  for i := 1 to 27 do WaveStep(S, dssWater);
+  Check(Checksum = 322188, 'water frame 30 checksum');
+  Check(Length(S.Cur) = 32000, 'water buffer size');
+  Check(S.Cur[0] = 8, 'water row 0 keeps its seed value');
+
+  WaveInit(S, dssFire, 320, 100);
+  WaveStep(S, dssFire);
+  Check(Checksum = 40300, 'fire frame 1 checksum');
+  Check(S.Cur[98 * 320 + 1] = 72, 'fire frame 1 row 98 second byte');
+  Check(S.Seed = $20AC, 'fire randSeed after frame 1');
+  Check(S.SdAl = 10, 'fire al carry after frame 1');
+  WaveStep(S, dssFire);
+  Check(Checksum = 61213, 'fire frame 2 checksum');
+  WaveStep(S, dssFire);
+  Check(Checksum = 77777, 'fire frame 3 checksum');
+  for i := 1 to 7 do WaveStep(S, dssFire);
+  Check(Checksum = 196714, 'fire frame 10 checksum');
+end;
+
+{ frames 0..3 are ground-truth vectors from the bit-exact Python emulator
+  tools/re/bundles_oracle.py (see tools/re/bundles_analysis.md); later
+  frames differ, because the oracle never erases the oldest trail record
+  and the picture filled up. The grid FNV
+  checksum runs over the 640x300 plane-space canvas, the display checksum over
+  the 320x100 decimated rect. Both reproduce the original VGA bit-plane
+  pipeline: color c draws plane (c-1) AND 3, draw ORs the pixel, erase XORs
+  the NOT mask. Seeds 0 and 1 share an RNG index (seed AND 3FE), as do 2 and
+  3; the first nonzero grid cell (row, column, palette color) is the key state. }
+procedure TestBundles;
+var
+  S: TBundlesSim;
+  i: Integer;
+
+  function FnvGrid: Cardinal;
+  var
+    px, py, v: Integer;
+  begin
+    Result := $811C9DC5;
+    for py := 0 to BnGridH - 1 do
+      for px := 0 to BnGridW - 1 do
+      begin
+        v := BundlesPixel(S, px, py);
+        Result := Result xor Cardinal(v);
+        Result := Result * $01000193;
+      end;
+  end;
+
+  function FnvDisp: Cardinal;
+  var
+    px, py, v: Integer;
+  begin
+    Result := $811C9DC5;
+    for py := 0 to BnDispH - 1 do
+      for px := 0 to BnDispW - 1 do
+      begin
+        v := BundlesDisplayValue(S, px, py);
+        Result := Result xor Cardinal(v);
+        Result := Result * $01000193;
+      end;
+  end;
+
+  function LitPixels: Integer;
+  var
+    px, py: Integer;
+  begin
+    Result := 0;
+    for py := 0 to BnGridH - 1 do
+      for px := 0 to BnGridW - 1 do
+        if BundlesPixel(S, px, py) <> 0 then Inc(Result);
+  end;
+
+  function FirstGrid: string;
+  var
+    px, py, v: Integer;
+  begin
+    for py := 0 to BnGridH - 1 do
+      for px := 0 to BnGridW - 1 do
+      begin
+        v := BundlesPixel(S, px, py);
+        if v <> 0 then
+          Exit(Format('(%d, %d, %d)', [py, px, v]));
+      end;
+    Result := 'None';
+  end;
+
+begin
+  { seed 1: 2 bundles, 5 lines, default config; colors [15, 3] }
+  BundlesInit(S, 0, 0, 1);
+  Check(S.NumBundles = 2, 'bundles default count');
+  Check(S.NumLines = 5, 'bundles default trail length');
+  Check(S.ColorArr[0] = 15, 'bundles seed 1 color 0');
+  Check(S.ColorArr[1] = 3, 'bundles seed 1 color 1');
+  CheckEq(FirstGrid, '(14, 152, 3)', 'bundles seed 1 frame 0 first pixel');
+  Check(FnvGrid = $5D7510F5, 'bundles seed 1 frame 0 grid fnv');
+  Check(FnvDisp = $3B97B3F9, 'bundles seed 1 frame 0 display fnv');
+  BundlesStep(S);
+  CheckEq(FirstGrid, '(11, 142, 3)', 'bundles seed 1 frame 1 first pixel');
+  Check(FnvGrid = $0F94AA87, 'bundles seed 1 frame 1 grid fnv');
+  Check(FnvDisp = $1CFE26B2, 'bundles seed 1 frame 1 display fnv');
+  BundlesStep(S);
+  Check(FnvGrid = $0210C0D0, 'bundles seed 1 frame 2 grid fnv');
+  Check(FnvDisp = $8967B7B3, 'bundles seed 1 frame 2 display fnv');
+  BundlesStep(S);
+  Check(FnvGrid = $752187D3, 'bundles seed 1 frame 3 grid fnv');
+  Check(FnvDisp = $4A2EF57C, 'bundles seed 1 frame 3 display fnv');
+  for i := 1 to 7 do BundlesStep(S);
+  Check(BundlesColor(S) = 3, 'bundles seed 1 chase color after 10 frames');
+  { the picture is the NumLines newest records of every bundle: old
+    segments leave it, so the lit area stays bounded. One segment is at
+    most 640 pixels long (x spans the grid, y moves on half-rows). }
+  for i := 1 to 300 do BundlesStep(S);
+  Check(LitPixels <= S.NumBundles * S.NumLines * BnGridW,
+    'bundles trail does not accumulate (' + IntToStr(LitPixels) + ' px)');
+  Check(LitPixels > 0, 'bundles keep a visible trail');
+
+  { seed 3: different RNG window; colors [10, 6]; trails grow differently }
+  BundlesInit(S, 0, 0, 3);
+  Check(S.ColorArr[0] = 10, 'bundles seed 3 color 0');
+  Check(S.ColorArr[1] = 6, 'bundles seed 3 color 1');
+  CheckEq(FirstGrid, '(14, 152, 2)', 'bundles seed 3 frame 0 first pixel');
+  Check(FnvGrid = $55CC0615, 'bundles seed 3 frame 0 grid fnv');
+  Check(FnvDisp = $B7FAC937, 'bundles seed 3 frame 0 display fnv');
+  BundlesStep(S);
+  CheckEq(FirstGrid, '(9, 106, 2)', 'bundles seed 3 frame 1 first pixel');
+  Check(FnvGrid = $A4BE72EF, 'bundles seed 3 frame 1 grid fnv');
+  Check(FnvDisp = $9636070D, 'bundles seed 3 frame 1 display fnv');
+  BundlesStep(S);
+  Check(FnvGrid = $FF147FED, 'bundles seed 3 frame 2 grid fnv');
+  Check(FnvDisp = $7174EC6F, 'bundles seed 3 frame 2 display fnv');
+  BundlesStep(S);
+  Check(FnvGrid = $C50613CD, 'bundles seed 3 frame 3 grid fnv');
+  Check(FnvDisp = $F959444D, 'bundles seed 3 frame 3 display fnv');
+  for i := 1 to 300 do BundlesStep(S);
+  Check(LitPixels <= S.NumBundles * S.NumLines * BnGridW,
+    'bundles seed 3 trail does not accumulate');
+
+  { seed 0 shares seed 1's RNG index; seed 2 shares seed 3's (seed AND 3FE) }
+  BundlesInit(S, 0, 0, 0);
+  Check(FnvGrid = $5D7510F5, 'bundles seed 0 == seed 1 grid fnv');
+  BundlesInit(S, 0, 0, 2);
+  Check(FnvGrid = $55CC0615, 'bundles seed 2 == seed 3 grid fnv');
+end;
+
+{ frozen clock for the CHIK rolls: value mod Bound, like helper 0x05E2 }
+type
+  TChikClk = object
+    Sec: Integer;
+    function Roll(Bound: Integer): Integer;
+  end;
+
+function TChikClk.Roll(Bound: Integer): Integer;
+begin
+  if Bound <= 0 then Result := 0
+  else Result := Sec mod Bound;
+end;
+
+{ blank cells of the CHIK grid, and whether all of them lie in the box
+  rectangle (bx,by)-(bx+w-1,by+h-1) }
+function ChikHoles(S: TChikSaver; bx, by, w, h: Integer;
+  out InBox: Boolean): Integer;
+var
+  x, y: Integer;
+begin
+  Result := 0;
+  InBox := True;
+  for y := 0 to S.Rows - 1 do
+    for x := 0 to S.Cols - 1 do
+      if S.Cell(x, y) = 0 then
+      begin
+        Inc(Result);
+        if (x < bx) or (x >= bx + w) or (y < by) or (y >= by + h) then
+          InBox := False;
+      end;
+end;
+
+{ CHIK.SS port: a FW x FH blank box rests FW frames on a cell, then
+  slides one cell along the leg; erased text never comes back. }
+procedure TestChik;
+var
+  clk: TChikClk;
+  S: TChikSaver;
+  grid: array of Word;
+  i, n, bx, by, minX, maxX, minY, maxY, moves: Integer;
+  inBox, inside: Boolean;
+begin
+  S := TChikSaver.Create(80, 25);
+  Check((S.BoxW = 4) and (S.BoxH = 5), 'chik default box is 4x5');
+  SetLength(grid, 80 * 25);
+  for i := 0 to High(grid) do grid[i] := $1F20;
+  S.SetScreen(@grid[0]);
+  clk.Sec := 5;
+  S.Init(@clk.Roll);
+  Check(S.FirstDelay = 5, 'chik first delay is the 20-roll');
+  bx := S.BoxX; by := S.BoxY;
+  Check((bx = 20) and (by = 0), 'chik box starts on the rolled lattice cell');
+  for i := 1 to 3 do S.Step;
+  n := ChikHoles(S, bx, by, 4, 5, inBox);
+  Check((n = 12) and inBox, 'chik boot wipe blanks one box row per frame');
+  for i := 4 to 5 do S.Step;
+  n := ChikHoles(S, bx, by, 4, 5, inBox);
+  Check((n = 20) and inBox, 'chik first walk frame blanks the whole 4x5 box');
+  Check(S.Phase = chpWalk, 'chik walks after the first delay');
+  Check((S.DirX = 0) and (S.DirY = 1), 'chik second 5 rolls south');
+  for i := 1 to 4 do S.Step;
+  Check((S.BoxX = bx) and (S.BoxY = by + 1), 'chik box slides one cell per 4 frames');
+  n := ChikHoles(S, bx, by, 4, 6, inBox);
+  Check((n = 24) and inBox, 'chik slide blanks the new box row');
+  S.Free;
+
+  { 80x43 uses the 4x6 box }
+  S := TChikSaver.Create(80, 43);
+  Check(S.BoxH = 6, 'chik 80x43 box is 4x6');
+  SetLength(grid, 80 * 43);
+  for i := 0 to High(grid) do grid[i] := $0720;
+  S.SetScreen(@grid[0]);
+  clk.Sec := 2;
+  S.Init(@clk.Roll);
+  bx := S.BoxX; by := S.BoxY;
+  for i := 1 to 2 do S.Step;
+  n := ChikHoles(S, bx, by, 4, 6, inBox);
+  Check((n = 24) and inBox, 'chik 80x43 first walk frame blanks the 4x6 box');
+  S.Free;
+
+  { a long run with a ticking clock: the box keeps to the screen and
+    really travels }
+  S := TChikSaver.Create(80, 25);
+  SetLength(grid, 80 * 25);
+  for i := 0 to High(grid) do grid[i] := $0720;
+  S.SetScreen(@grid[0]);
+  clk.Sec := 11;
+  S.Init(@clk.Roll);
+  minX := MaxInt; maxX := -1; minY := MaxInt; maxY := -1;
+  inside := True; moves := 0;
+  bx := S.BoxX; by := S.BoxY;
+  for i := 1 to 4000 do
+  begin
+    clk.Sec := 11 + i div 37;
+    S.Step;
+    if (S.BoxX < 0) or (S.BoxX > 80 - 4) or (S.BoxY < 0) or
+       (S.BoxY > 25 - 5) then inside := False;
+    if (S.BoxX <> bx) or (S.BoxY <> by) then Inc(moves);
+    bx := S.BoxX; by := S.BoxY;
+    if bx < minX then minX := bx;
+    if bx > maxX then maxX := bx;
+    if by < minY then minY := by;
+    if by > maxY then maxY := by;
+  end;
+  Check(inside, 'chik box stays on the screen');
+  Check(moves > 200, 'chik box keeps walking (' + IntToStr(moves) + ' slides)');
+  Check((maxX - minX >= 20) and (maxY - minY >= 5),
+    'chik box travels across the screen');
+  S.Free;
+end;
+
+{ ASCOPE.SS port: a 3:2 Lissajous figure with a one-step Y phase drift
+  per frame and a phosphor afterglow. }
+procedure TestAscope;
+var
+  S: TAscopeSim;
+  i, x, y, minX, maxX, minY, maxY: Integer;
+  h1, h2, h32: Cardinal;
+begin
+  AscopeInit(S);
+  Check(AscopeChecksum(S) = 0, 'ascope init clears the canvas');
+  Check((S.Px = 0) and (S.Py = 0), 'ascope init phases');
+  AscopeStep(S);
+  { a real sine reaches both edges of the canvas (peak 16000 of 16384,
+    so a few cells stay free at each side) }
+  minX := MaxInt; maxX := -1; minY := MaxInt; maxY := -1;
+  for y := 0 to AscopeH - 1 do
+    for x := 0 to AscopeW - 1 do
+      if S.Buf[y * AscopeW + x] <> 0 then
+      begin
+        if x < minX then minX := x;
+        if x > maxX then maxX := x;
+        if y < minY then minY := y;
+        if y > maxY then maxY := y;
+      end;
+  Check((minX <= 6) and (maxX >= AscopeW - 7) and (minY <= 4) and
+        (maxY >= AscopeH - 5), 'ascope trace spans the canvas');
+  h1 := AscopeFnv(S);
+  AscopeStep(S);
+  h2 := AscopeFnv(S);
+  Check(h1 <> h2, 'ascope figure changes from frame to frame');
+  for i := 3 to 10 do AscopeStep(S);
+  Check(S.Px = 0, 'ascope x phase closes every frame');
+  Check(S.Py = 10, 'ascope y phase drifts one step per frame');
+  Check(AscopeChecksum(S) > 0, 'ascope keeps a visible trace');
+  h32 := AscopeFnv(S);
+  AscopeInit(S); AscopeSetRatio(S, 5, 3);
+  for i := 1 to 10 do AscopeStep(S);
+  Check(AscopeFnv(S) <> h32, 'ascope ratio 5:3 traces another figure');
+  Check(Length(S.Buf) = AscopeW * AscopeH, 'ascope canvas size 32000');
 end;
 
 begin
@@ -2663,6 +3146,13 @@ begin
   TestResolveCommand;
   TestExecutablePath;
   TestIsAppBundle;
+  TestDetectTerm;
+  TestFontCatalog;
+  TestDnPalettes;
+  TestDosSavers;
+  TestBundles;
+  TestChik;
+  TestAscope;
   if Failures = 0 then
     WriteLn(Checks, ' unit checks passed')
   else

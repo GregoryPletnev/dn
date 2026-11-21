@@ -129,3 +129,50 @@ def test_screensaver_starts_and_wake_key_is_consumed(sandbox):
         assert all('Z' not in l for l in s.display()), s.dump()
     finally:
         s.close()
+
+
+def test_saver_picker_shows_a_live_preview(sandbox):
+    s = make_session(sandbox)
+    try:
+        s.wait_text('a.txt')
+        s.click_on('Options')
+        s.click_on('Screen saver...')
+        # the picker lists the savers plus "Off"
+        s.wait_text('Starry sky')
+        s.wait_text('Water (DOS AZ_WATER)')
+        s.wait_text('Fire (DOS AZ_FIRE)')
+        # it opens on the configured saver (default: the star field), so
+        # OK without a move keeps the current choice
+        assert any(any(ch in '·∙•♦☼' for ch in line) for line in s.display()), \
+            s.dump()
+        assert all('saver off' not in l for l in s.display()), s.dump()
+        # the "Off" row paints its "saver off" preview pane
+        s.mouse(2, s.row_of('Off'))
+        s.wait_text('saver off')
+        # record the picker frame color before any DOS preview runs
+        title = s.row_of('Screen saver')
+        frame = s.cell(title, 2)
+        frame_before = (frame.fg, frame.bg)
+        # moving back to the star field repaints the pane with star glyphs
+        row = s.row_of('Starry sky')
+        s.mouse(2, row)
+        s.wait_gone('saver off', timeout=3)
+        assert any(any(ch in '·∙•♦☼' for ch in line) for line in s.display()), \
+            s.dump()
+        # the DOS water saver previews a shade-ramp field, not the star chars
+        row = s.row_of('Water (DOS AZ_WATER)')
+        s.mouse(2, row)
+        assert any(any(ch in '░▒▓█' for ch in line) for line in s.display()), \
+            s.dump()
+        # a preview frame must not touch the interface color pairs: the
+        # picker frame keeps its color after the DOS preview ran
+        row = s.row_of('Bundles (DOS BUNDLES)')
+        s.mouse(2, row)
+        s.wait_text('Screen saver')
+        title = s.row_of('Screen saver')
+        frame = s.cell(title, 2)
+        assert (frame.fg, frame.bg) == frame_before, \
+            'a preview frame repainted the dialog colors: ' + s.dump()
+    finally:
+        s.close()
+

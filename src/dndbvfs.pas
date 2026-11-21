@@ -5,11 +5,13 @@
   ClickHouse:  the same with databases instead of schemas
   SQLite:      db://name/            the tables and views directly
 
-  A table's "size" is its row estimate (pg_class.reltuples,
-  system.tables.total_rows; 0 when unknown). F3/Enter show the rows in a
-  grid, F4 opens an SQL window, F5 to a local panel exports the table as
-  CSV (GetFile). Writing (PutFile, delete, mkdir) is refused: changes go
-  through SQL. }
+  A table's "size" is its row count: an estimate from PostgreSQL and
+  ClickHouse (pg_class.reltuples, system.tables.total_rows). SQLite keeps no
+  estimate, so the listing leaves the size unknown (0) and never runs
+  count(*): on a large file that scan hangs the panel. F3/Enter show the
+  rows in a grid, F4 opens an SQL window, F5 to a local panel exports the
+  table as CSV (GetFile). Writing (PutFile, delete, mkdir) is refused:
+  changes go through SQL. }
 unit dndbvfs;
 
 {$mode objfpc}{$H+}
