@@ -13,3 +13,27 @@ PUBLISHING.md
 
 # Референсные исходники оригинального DN — только локально
 original/
+
+# Остатки линковки FPC (ppas/ld при сбое сборки)
+/link*.res
+/linkfiles*.res
+/ppaslink.sh
+/symbol_order.fpc
+
+# Локальные файлы прогонов dn и тестов
+/dn.mnu
+/test.sql3
+/work/
+
+# Оригинальный пакет заставок RIT — только локально; в репозитории
+# лежат лишь исходники SOURCE/
+/ssavers.zip
+/ssavers_raw/*
+!/ssavers_raw/SOURCE/
+
+# Черновые скрипты и отчёты реверса заставок
+/tools/re/_*.py
+/tools/re/unlzexe*.py
+/tools/re/bxadd.py
+/tools/re/wave386.py
+/tools/re/report.txt
